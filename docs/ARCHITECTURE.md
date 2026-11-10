@@ -36,6 +36,8 @@ src/
                 civilization.ts   peuples, dirigeants, dynasties, culture, croyances, colonies
                 tech.ts           arbre technologique et ses effets
                 war.ts            diplomatie, armées, sièges, batailles, traités, sécessions
+                divine.ts         pouvoirs divins et réactions des peuples
+                chronicle.ts      récits historiques, chaque phrase liée à ses sources
                 pathfinding.ts    A* + lissage par lignes de vue
                 sim.worker.ts / simClient.ts   exécution dans un Web Worker, instantanés
                 text.ts           souvenirs → phrases (chaque phrase = un événement réel)

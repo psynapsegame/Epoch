@@ -17,6 +17,8 @@ export type ToWorker =
   | { type: 'state'; request: number }
   | { type: 'search'; request: number; query: string }
   | { type: 'divine'; request: number; act: DivineAct }
+  | { type: 'chronicle'; request: number; scope: number }
+  | { type: 'tree'; request: number; id: number }
   | { type: 'site'; site: SimSite }
   | { type: 'stop' };
 
@@ -77,6 +79,12 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
     }
     case 'site':
       sim?.replaceSite(m.site);
+      break;
+    case 'chronicle':
+      ctx.postMessage({ type: 'reply', request: m.request, value: sim ? sim.chronicle(m.scope) : null });
+      break;
+    case 'tree':
+      ctx.postMessage({ type: 'reply', request: m.request, value: sim ? sim.tree(m.id) : null });
       break;
     case 'search':
       ctx.postMessage({ type: 'search', request: m.request, hits: sim ? sim.search(m.query) : [] });

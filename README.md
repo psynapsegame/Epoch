@@ -6,7 +6,7 @@ joueur-divinité. Paysage, tactile, hors ligne.
 
 > « Avant les royaumes, avant les guerres, avant les légendes, il n’existait qu’un monde. »
 
-Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 6 — les pouvoirs divins.**
+Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 7 — les chroniques.**
 
 ## Lancer
 
@@ -113,7 +113,13 @@ Détails : [docs/WAR.md](docs/WAR.md).
 
 Détails : [docs/DIVINITY.md](docs/DIVINITY.md).
 
-La section Chroniques est verrouillée dans l’interface tant que son système n’existe pas : aucune
-donnée fictive n’est affichée.
+## Ce que contient la phase 7
+
+- **Annales du monde** et **chroniques des peuples** rédigées à partir des seuls faits enregistrés ;
+  toucher une phrase montre ses sources.
+- **Annales chiffrées** exactes, année par année ; **récits de vie** ; **arbres généalogiques** des
+  vivants et des morts ; export des récits.
+
+Détails : [docs/CHRONICLES.md](docs/CHRONICLES.md).
 
 Architecture détaillée : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

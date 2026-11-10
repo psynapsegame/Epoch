@@ -244,6 +244,34 @@ export interface SettlementState {
   protectedUntil: number;
   /** Abundant game sent by the heavens. */
   gameUntil: number;
+  /** Exact counts for the current year, closed into the annals every new year. */
+  tally: Tally;
+}
+
+export interface Tally {
+  births: number;
+  deaths: number;
+  /** Deaths by cause. */
+  age: number;
+  hunger: number;
+  battle: number;
+  disaster: number;
+  marriages: number;
+  built: number;
+}
+
+export const emptyTally = (): Tally => ({ births: 0, deaths: 0, age: 0, hunger: 0, battle: 0, disaster: 0, marriages: 0, built: 0 });
+
+/** One settlement's year, as closed in the annals: exact figures that outlive the detailed event log. */
+export interface YearRecord extends Tally {
+  id: number;
+  /** The year that ended. */
+  year: number;
+  settlement: number;
+  civ: number;
+  /** Population at the end of the year. */
+  pop: number;
+  harvest: number;
 }
 
 export type SimEventType =
@@ -252,8 +280,10 @@ export type SimEventType =
   | 'war' | 'peace' | 'alliance' | 'battle' | 'siege' | 'conquest' | 'secession'
   | 'divine' | 'omen';
 
-/** A dated fact recorded by the simulation (seed of the future chronicles). */
+/** A dated fact recorded by the simulation: the only raw material of the chronicles. */
 export interface SimEvent {
+  /** Unique, increasing number given when the event is recorded. */
+  id?: number;
   t: number;
   type: SimEventType;
   settlement: number;
@@ -289,6 +319,10 @@ export interface SimState {
   armies: Army[];
   /** The player's power to act upon the world, fed by the devotion of the peoples. */
   divine: { energy: number; acts: number };
+  /** Yearly records of every inhabited settlement, kept for ever. */
+  annals: YearRecord[];
+  /** Last event id given. */
+  eventSeq: number;
   nextBuildingId: number;
   /** Ticks merged per step: 1 = finest; raised at very high speeds (coarser, aggregated simulation). */
   stride: number;
@@ -577,6 +611,19 @@ export interface WorldView {
   /** Most recent recorded events of the whole world, oldest first. */
   events: SimEvent[];
   divine: { energy: number; acts: number };
+}
+
+/** A person as shown in a family tree (living or dead). */
+export interface TreeNode { id: number; name: string; sex: 0 | 1; birth: number; death: number; settlement: number }
+
+export interface FamilyTree {
+  self: TreeNode;
+  spouse: TreeNode | null;
+  parents: TreeNode[];
+  grandparents: TreeNode[];
+  siblings: TreeNode[];
+  children: TreeNode[];
+  grandchildren: TreeNode[];
 }
 
 export interface SearchHit { id: number; name: string; alive: boolean; birth: number; death: number; settlement: number }

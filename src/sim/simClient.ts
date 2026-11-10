@@ -1,5 +1,7 @@
+import type { Chronicle } from './chronicle';
 import type { DivineAct, DivineResult } from './divine';
 import type { ToWorker } from './sim.worker';
+import type { FamilyTree } from './types';
 import type { EconomyView, FoundingBuilding, PersonView, RosterEntry, SearchHit, SimBuilding, SimSite, SimState, Snapshot, WorldView } from './types';
 
 /** Main-thread handle on the simulation worker. */
@@ -22,6 +24,7 @@ export class SimClient {
   onWorld: (() => void) | null = null;
   private searches = new Map<number, (h: SearchHit[]) => void>();
   private divines = new Map<number, (r: DivineResult) => void>();
+  private replies = new Map<number, (v: unknown) => void>();
   onRoster: (() => void) | null = null;
   onBuildings: (() => void) | null = null;
   onDetail: ((id: number, view: PersonView | null) => void) | null = null;
@@ -51,6 +54,10 @@ export class SimClient {
         case 'world':
           this.world = m.world as WorldView;
           this.onWorld?.();
+          break;
+        case 'reply':
+          this.replies.get(m.request)?.(m.value);
+          this.replies.delete(m.request);
           break;
         case 'divine':
           this.divines.get(m.request)?.(m.result);
@@ -101,6 +108,24 @@ export class SimClient {
   /** Subscribes to live details of one person (0 = none). */
   watch(id: number): void {
     this.send({ type: 'watch', id });
+  }
+
+  private ask<T>(message: (request: number) => ToWorker): Promise<T> {
+    return new Promise((resolve) => {
+      const request = this.nextRequest++;
+      this.replies.set(request, resolve as (v: unknown) => void);
+      this.send(message(request));
+    });
+  }
+
+  /** The written history of the world (0) or of a people, composed in the simulation thread. */
+  chronicle(scope: number): Promise<Chronicle | null> {
+    return this.ask((request) => ({ type: 'chronicle', request, scope }));
+  }
+
+  /** Family tree of a living or dead person. */
+  tree(id: number): Promise<FamilyTree | null> {
+    return this.ask((request) => ({ type: 'tree', request, id }));
   }
 
   /** Carries out a divine intervention in the simulation and reports what it did. */

@@ -12,9 +12,10 @@ import { TECHS, TECH_BY_ID } from '../sim/tech';
 import { FAITH_COLORS_HEX, civCss } from '../render/palette';
 import { siteFrame } from '../sim/sites';
 import { POWERS, POWER_ORDER, type DivinePower } from '../sim/divine';
+import { chronicleText, type Chronicle } from '../sim/chronicle';
 import {
   ACTIVITY_LABELS, CULTURE_AXES, GOVERNMENT_LABELS, JOB_LABELS_F, JOB_LABELS_M, NEED_LABELS, RESOURCE_LABELS, RULER_TITLES, SKILL_LABELS, TRAIT_LABELS,
-  WAR_CAUSE_LABELS, type DeadPerson, type Person, type PersonView, type SimEvent,
+  WAR_CAUSE_LABELS, type DeadPerson, type FamilyTree, type Person, type PersonView, type SimEvent, type TreeNode,
 } from '../sim/types';
 import type { Building } from '../sim/settlements';
 import type { BuildingKind } from '../render/models/buildings';
@@ -37,7 +38,7 @@ const SECTIONS: { id: SectionId; label: string; phase: number }[] = [
   { id: 'chronicles', label: 'Chroniques', phase: 7 },
   { id: 'divinity', label: 'Divinité', phase: 6 },
 ];
-const CURRENT_PHASE = 6;
+const CURRENT_PHASE = 7;
 
 const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
   hut: ['Hutte', 'Abri rudimentaire pour une petite famille.'],
@@ -92,6 +93,10 @@ export class App {
   private econSite = 0;
   private civShown = 0;
   private armed: DivinePower | null = null;
+  private chron: Chronicle | null = null;
+  private chronScope = 0;
+  /** Person whose family tree is shown in the inspector (0 = none). */
+  private treeFor = 0;
   private armedBar: HTMLElement;
   private historyFilter = 'all';
   private labels: HTMLElement;
@@ -149,7 +154,7 @@ export class App {
     game.engine.controls.onClick = (ev) => this.onWorldClick(ev);
     game.onTick = () => this.tick();
     game.sim.onDetail = (id, view) => {
-      if (id === game.selected && view && !this.inspectorHeld) this.renderPerson(view);
+      if (id === game.selected && view && !this.inspectorHeld && !this.treeFor) this.renderPerson(view);
     };
     game.sim.onRoster = () => {
       if (this.section === 'population') this.renderPopulationPanel();
@@ -322,6 +327,7 @@ export class App {
     if (id === 'politics') this.renderPoliticsPanel();
     if (id === 'history') this.renderHistoryPanel();
     if (id === 'divinity') this.renderDivinityPanel();
+    if (id === 'chronicles') void this.loadChronicle(this.chronScope);
     if (id === 'atlas') {
       this.tutorialState.atlas = true;
       this.renderAtlasPanel();
@@ -449,6 +455,7 @@ export class App {
   // ------------------------------------------------------------ inspector
   private closeInspector(): void {
     this.inspector.classList.add('closed');
+    this.treeFor = 0;
     this.shownBuilding = 0;
     this.game.select(0);
   }
@@ -469,6 +476,7 @@ export class App {
   /** Selects an inhabitant and opens their sheet (filled as soon as the simulation answers). */
   private selectPerson(id: number, travel: boolean): void {
     const g = this.game;
+    this.treeFor = 0;
     g.select(id, travel);
     const r = g.sim.rosterById.get(id);
     this.inspector.innerHTML = `<button class="close" data-a="close">×</button><div class="kicker">Habitant</div><h2>${r ? esc(r.name) : '…'}</h2>`;
@@ -493,6 +501,8 @@ export class App {
       b.classList.toggle('primary', g.following);
       if (g.following && g.engine.controls.goalDistance > 220) g.engine.controls.flyTo(g.engine.controls.goalDir, 110, 1.05);
     }
+    if (b.dataset.a === 'tree') void this.showTree(Number(b.dataset.id));
+    if (b.dataset.tree) void this.showTree(Number(b.dataset.tree));
     if (b.dataset.person) this.selectPerson(Number(b.dataset.person), true);
   }
 
@@ -523,7 +533,7 @@ export class App {
       const bondLabel = (x: number) => (x >= 0.5 ? (female ? 'Amie' : 'Ami') : x >= 0.15 ? 'Bonne entente' : x <= -0.3 ? 'Brouille' : x < 0 ? 'Froideur' : 'Connaissance');
       body = `
         <div class="status"><b>${what}</b><small>${years < 14 ? 'Enfant' : years >= 68 ? `${female ? 'Ancienne' : 'Ancien'}` : (female ? JOB_LABELS_F : JOB_LABELS_M)[a.job]}${workplace ? ` · ${workplace}` : ''}${a.carry >= 0.5 ? ` · porte ${fmt(a.carry, 1)} × ${RESOURCE_LABELS[a.carryRes].toLowerCase()}` : ''}${a.pregnantUntil ? ' · attend un enfant' : ''}</small></div>
-        <div class="btns"><button class="btn ${g.following ? 'primary' : ''}" data-a="follow">Suivre</button></div>
+        <div class="btns"><button class="btn ${g.following ? 'primary' : ''}" data-a="follow">Suivre</button><button class="btn" data-a="tree" data-id="${a.id}">Arbre généalogique</button></div>
         <h3>Besoins</h3>${NEED_LABELS.map((l, i) => this.meter(l, a.needs[i])).join('')}${this.meter('Santé', a.health)}
         <h3>Ce qui l’attire maintenant</h3>${v.utilities.slice(0, 3).map((u) => this.meter(ACTIVITY_LABELS[u.activity], Math.min(1, u.score), 'calm')).join('')}
         <h3>Personnalité</h3>${TRAIT_LABELS.map((l, i) => this.meter(l, a.traits[i], 'calm')).join('')}
@@ -534,7 +544,8 @@ export class App {
         ${bonds.length ? `<h3>Liens</h3>${bonds.map(([id, val]) => link(id, bondLabel(val))).join('')}` : ''}`;
     } else {
       const d = p as DeadPerson;
-      body = `<div class="status"><b>${female ? 'Morte' : 'Mort'} ${d.cause === 'thirst' ? 'de soif' : d.cause === 'age' ? 'de vieillesse' : d.cause === 'battle' ? 'au combat' : 'de faim'}</b><small>${formatDate(d.death)}, à ${years} ans</small></div>
+      body = `<div class="status"><b>${female ? 'Morte' : 'Mort'} ${d.cause === 'thirst' ? 'de soif' : d.cause === 'age' ? 'de vieillesse' : d.cause === 'battle' ? 'au combat' : d.cause === 'disaster' ? 'dans un fléau' : 'de faim'}</b><small>${formatDate(d.death)}, à ${years} ans</small></div>
+        <div class="btns"><button class="btn" data-a="tree" data-id="${d.id}">Arbre généalogique</button></div>
         <h3>Famille</h3>${[d.spouse, ...d.parents, ...d.children].filter(Boolean).map((id) => link(id, id === d.spouse ? 'Conjoint' : d.children.includes(id) ? 'Enfant' : 'Parent')).join('')}`;
     }
     const absent = v.alive ? [p.spouse, ...p.parents].filter((id) => id && !v.household?.members.includes(id)) : [];
@@ -544,6 +555,7 @@ export class App {
       <div class="sub">${years} an${years > 1 ? 's' : ''} · ${female ? 'femme' : 'homme'} · ${esc(v.settlementName)}${ruled ? ` · ${RULER_TITLES[ruled.government][female ? 1 : 0]} du peuple de ${esc(ruled.name)}` : ''}${faith ? `<br>Fidèle : ${esc(faith.name)}` : ''}</div>
       ${body}
       ${absent.length ? `<h3>Famille</h3>${absent.map((id) => link(id, id === p.spouse ? 'Conjoint' : 'Parent')).join('')}` : ''}
+      <h3>Récit de vie</h3><p class="bio">${esc(this.biography(v))}</p>
       <h3>Chronologie</h3>
       <ul class="timeline">${[...p.memories].reverse().slice(0, 14).map((m) => `<li><small>${formatDate(m.t)}</small>${esc(memoryText(m, v.names, female))}</li>`).join('')}</ul>`;
     const top = this.inspector.scrollTop;
@@ -879,6 +891,120 @@ export class App {
       node.style.display = '';
     }
     for (const [id, node] of this.labelNodes) if (!seen.has(id)) node.style.display = 'none';
+  }
+
+  // ----------------------------------------------------------- chronicles
+  /** A short life story: every clause restates a recorded fact of the person's sheet. */
+  private biography(v: PersonView): string {
+    const p = v.person;
+    const f = p.sex === 0;
+    const nm = (id: number) => v.names[id];
+    const parents = p.parents.map(nm).filter(Boolean);
+    const out: string[] = [`${f ? 'Née' : 'Né'} à ${p.birthPlace} (${formatDate(p.birth).replace('An ', 'an ')})${parents.length ? `, ${f ? 'fille' : 'fils'} de ${parents.join(' et ')}` : ''}.`];
+    const mem = p.memories;
+    const has = (t: string) => mem.filter((m) => m.type === t);
+    const spouse = has('married').map((m) => nm(m.ref ?? 0)).filter(Boolean);
+    if (spouse.length) out.push(`${f ? 'Unie' : 'Uni'} à ${spouse[spouse.length - 1]}.`);
+    if (p.children.length) out.push(`${f ? 'Mère' : 'Père'} de ${p.children.length} enfant${p.children.length > 1 ? 's' : ''}.`);
+    const deeds = mem.filter((m) => ['ruler', 'deposed', 'prophet', 'chosen', 'colonist', 'discoveryTech', 'built', 'battle', 'wounded', 'conquered', 'journey'].includes(m.type));
+    const seen = new Set<string>();
+    for (const m of deeds) {
+      const text = memoryText(m, v.names, f);
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      if (seen.size > 7) break;
+      out.push(`${text} (${formatDate(m.t).replace('An ', 'an ').replace(/, jour.*/, '')}).`);
+    }
+    const friends = has('friend').length, griefs = has('mourning').length;
+    if (friends) out.push(`${friends} amitié${friends > 1 ? 's' : ''} nouée${friends > 1 ? 's' : ''}.`);
+    if (griefs) out.push(`${griefs} deuil${griefs > 1 ? 's' : ''} traversé${griefs > 1 ? 's' : ''}.`);
+    if (!v.alive) {
+      const d = p as DeadPerson;
+      out.push(`${f ? 'Morte' : 'Mort'} à ${Math.floor(v.age)} ans (${formatDate(d.death).replace('An ', 'an ').replace(/, jour.*/, '')}).`);
+    }
+    return out.join(' ');
+  }
+
+  /** Family tree of a living or dead person, five generations around them. */
+  private async showTree(id: number): Promise<void> {
+    const g = this.game;
+    const tree: FamilyTree | null = await g.sim.tree(id);
+    if (!tree) return;
+    this.treeFor = id;
+    const year = (t: number) => formatDate(t).replace('An ', 'an ').replace(/, jour.*/, '');
+    const row = (n: TreeNode, role = '') => `<button class="row" data-tree="${n.id}"><span class="name">${esc(n.name)}${n.death ? ' †' : ''}</span><small>${role ? `${role} · ` : ''}${year(n.birth)}${n.death ? ` – ${year(n.death)}` : ''}</small></button>`;
+    const group = (title: string, list: TreeNode[]) => (list.length ? `<h3>${title} (${list.length})</h3>${list.map((n) => row(n)).join('')}` : '');
+    const me = tree.self;
+    this.inspector.innerHTML = `<button class="close" data-a="close">×</button>
+      <div class="kicker">Arbre généalogique</div><h2>${esc(me.name)}${me.death ? ' †' : ''}</h2>
+      <div class="sub">${year(me.birth)}${me.death ? ` – ${year(me.death)}` : ''} · ${esc(this.placeName(me.settlement))}</div>
+      <div class="btns"><button class="btn primary" data-person="${me.id}">Voir la fiche</button></div>
+      ${group('Grands-parents', tree.grandparents)}${group('Parents', tree.parents)}
+      ${tree.spouse ? `<h3>${tree.spouse.sex === 0 ? 'Épouse' : 'Époux'}</h3>${row(tree.spouse)}` : ''}
+      ${group('Frères et sœurs', tree.siblings)}${group('Enfants', tree.children)}${group('Petits-enfants', tree.grandchildren)}
+      ${tree.parents.length + tree.children.length + tree.siblings.length === 0 && !tree.spouse ? '<p class="note">Aucune parenté connue des archives.</p>' : ''}
+      <p class="note">Touchez un nom pour recentrer l’arbre sur cette personne. † : défunt.</p>`;
+    this.inspector.scrollTop = 0;
+    this.inspector.classList.remove('closed');
+  }
+
+  private async loadChronicle(scope: number): Promise<void> {
+    this.chronScope = scope;
+    this.panel.querySelector('h2')!.textContent = 'Chroniques';
+    const body = this.panel.querySelector<HTMLElement>('.body')!;
+    if (!this.chron || this.chron.scope !== scope) body.innerHTML = '<p class="note">Les scribes consultent les archives…</p>';
+    const ch = await this.game.sim.chronicle(scope);
+    if (this.section !== 'chronicles' || this.chronScope !== scope) return;
+    this.chron = ch;
+    this.renderChronicle();
+  }
+
+  /** The written history. Each sentence can be touched to see the recorded facts it rests on. */
+  private renderChronicle(): void {
+    const g = this.game;
+    const body = this.panel.querySelector<HTMLElement>('.body')!;
+    const ch = this.chron;
+    const civs = g.sim.world?.civs ?? [];
+    const scopes = `<div class="btns"><button class="btn ${this.chronScope === 0 ? 'primary' : ''}" data-scope="0">Monde</button>${civs.map((c) => `<button class="btn ${this.chronScope === c.id ? 'primary' : ''}" data-scope="${c.id}"><span class="dot" style="background:${civCss(c.color)}"></span>${esc(c.name)}${c.fallen ? ' †' : ''}</button>`).join('')}</div>`;
+    if (!ch) { body.innerHTML = `${scopes}<p class="note">Rien n’a encore été consigné.</p>`; return; }
+    body.innerHTML = `${scopes}
+      <div class="chron"><div class="chron-title">${esc(ch.title)}</div><p class="chron-sub">${esc(ch.subtitle)}</p>
+      ${ch.chapters.map((c, ci) => `<h3>${esc(c.title)}</h3>${c.paragraphs.map((p, pi) => `<p>${p.map((s, si) => `<span data-s="${ci}.${pi}.${si}">${esc(s.text)}</span>`).join(' ')}</p>`).join('')}`).join('') || '<p class="note">Rien n’a encore été consigné pour ce peuple.</p>'}</div>
+      <div class="btns"><button class="btn" data-a="refresh">Actualiser</button><button class="btn" data-a="export">Exporter le récit</button></div>
+      <p class="note">Ce récit est composé uniquement à partir des faits enregistrés par la simulation : rien n’y est inventé. Touchez une phrase pour voir ses sources.</p>`;
+    body.scrollTop = 0;
+    body.querySelectorAll<HTMLElement>('[data-scope]').forEach((b) => b.addEventListener('click', () => void this.loadChronicle(Number(b.dataset.scope))));
+    body.querySelector('[data-a="refresh"]')!.addEventListener('click', () => void this.loadChronicle(this.chronScope));
+    body.querySelector('[data-a="export"]')!.addEventListener('click', async () => {
+      try { await shareTextFile(`epoch-chronique-${ch.scope || 'monde'}.txt`, chronicleText(ch)); } catch (e) { this.toast(`Export impossible : ${(e as Error).message}`); }
+    });
+    body.querySelector('.chron')!.addEventListener('click', (e) => {
+      const span = (e.target as HTMLElement).closest<HTMLElement>('[data-s]');
+      if (!span) return;
+      body.querySelectorAll('.chron span.on').forEach((x) => x.classList.remove('on'));
+      span.classList.add('on');
+      const [ci, pi, si] = span.dataset.s!.split('.').map(Number);
+      this.showSources(ci, pi, si);
+    });
+  }
+
+  /** The recorded facts behind one sentence of the chronicle. */
+  private showSources(ci: number, pi: number, si: number): void {
+    const ch = this.chron;
+    const s = ch?.chapters[ci]?.paragraphs[pi]?.[si];
+    if (!ch || !s) return;
+    this.game.select(0);
+    this.treeFor = 0;
+    const events = s.sources.map((id) => ch.events[id]).filter(Boolean);
+    const annals = s.annals.map((id) => ch.annals[id]).filter(Boolean).sort((a, b) => a.year - b.year || a.settlement - b.settlement);
+    this.inspector.innerHTML = `<button class="close" data-a="close">×</button>
+      <div class="kicker">Sources de ce passage</div>
+      <p class="quote">${esc(s.text)}</p>
+      ${events.length ? `<h3>Événement${events.length > 1 ? 's' : ''} enregistré${events.length > 1 ? 's' : ''}</h3><ul class="timeline">${events.map((e) => this.eventLine(e)).join('')}</ul>` : ''}
+      ${annals.length ? `<h3>Relevés annuels (${annals.length})</h3><ul class="timeline">${annals.map((a) => `<li><small>An ${a.year} · ${esc(this.placeName(a.settlement))}</small>${a.births} naissance${a.births > 1 ? 's' : ''}, ${a.deaths} décès, ${a.marriages} union${a.marriages > 1 ? 's' : ''}, ${a.built} bâtiment${a.built > 1 ? 's' : ''} ; ${a.pop} habitants en fin d’année</li>`).join('')}</ul>` : ''}
+      <p class="note">Le récit ne dit rien de plus que ces faits.</p>`;
+    this.inspector.scrollTop = 0;
+    this.inspector.classList.remove('closed');
   }
 
   // ------------------------------------------------------------- divinity

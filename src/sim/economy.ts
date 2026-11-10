@@ -7,7 +7,7 @@ import { cellOf } from './pathfinding';
 import { dwellingCapacity } from './sites';
 import type { Simulation } from './simulation';
 import {
-  BASE_PRICE, J, JOB_COUNT, R, RESOURCE_COUNT,
+  BASE_PRICE, J, JOB_COUNT, R, RESOURCE_COUNT, emptyTally,
   type Household, type Person, type SettlementState, type SimBuilding, type SimSite,
 } from './types';
 
@@ -400,6 +400,7 @@ export function workOnProject(sim: Simulation, st: SettlementState, b: SimBuildi
   if (b.progress >= 0.9999) {
     b.progress = 1;
     b.completed = sim.state.time;
+    st.tally.built++;
     st.projects = st.projects.filter((id) => id !== b.id);
     sim.record({ t: sim.state.time, type: 'built', settlement: st.id, what: b.kind, a: builder.id, names: [sim.nameOf(builder)] });
     sim.remember(builder, { t: sim.state.time, type: 'built', what: b.kind });
@@ -527,6 +528,7 @@ export function lifeCycle(sim: Simulation, st: SettlementState): void {
     m.spouse = w.id;
     sim.remember(w, { t: time, type: 'married', ref: m.id });
     sim.remember(m, { t: time, type: 'married', ref: w.id });
+    st.tally.marriages++;
     sim.record({ t: time, type: 'marriage', settlement: st.id, a: w.id, b: m.id, names: [sim.nameOf(w), sim.nameOf(m)] });
     // the bride or groom joins the roomier household; a home of their own comes when one is free
     if (w.household !== m.household) {
@@ -575,6 +577,14 @@ export function dailyUpdate(sim: Simulation): void {
   const newYear = ((day % DAYS_PER_YEAR) + DAYS_PER_YEAR) % DAYS_PER_YEAR === 0;
   for (const st of s.settlements) {
     const { pop } = sim.census(st.id);
+    if (newYear) {
+      // close the year in the annals: exact figures, kept for ever
+      const ty = st.tally;
+      if (pop > 0 || ty.births + ty.deaths + ty.built > 0) {
+        s.annals.push({ id: s.annals.length + 1, year: Math.round(day / DAYS_PER_YEAR), settlement: st.id, civ: st.civ, pop, harvest: st.harvest, ...ty });
+      }
+      st.tally = emptyTally();
+    }
     const cap = sim.forageCapacity(st.id);
     st.forage = Math.min(cap, st.forage + cap * 0.5 * (st.droughtUntil > s.time ? 0.4 : 1) * (st.gameUntil > s.time ? 1.8 : 1));
     if (pop === 0) continue;

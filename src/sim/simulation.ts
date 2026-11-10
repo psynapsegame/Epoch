@@ -3,6 +3,7 @@ import { clamp01 } from '../core/math';
 import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour, seasonPhase } from './clock';
 import { addResearch, contact, foundCivilization, onDeath } from './civilization';
 import { BUILD_COST, ageAt, countKind, dailyUpdate, isAdult, stockTargets, updatePrices, workOnProject } from './economy';
+import { buildChronicle, type Chronicle } from './chronicle';
 import { marksOf } from './divine';
 import { BASE_MODS, modsFor, type Mods } from './tech';
 import { armiesStep, atWar, relationOf } from './war';
@@ -10,8 +11,8 @@ import { cellOf, findPath, isWalkable, nearestWalkable } from './pathfinding';
 import { blankPerson, createPopulation } from './populate';
 import { dwellingCapacity } from './sites';
 import {
-  ACTIVITY_COUNT, Activity, BASE_PRICE, J, JOB_COUNT, N, Phase, R, RESOURCE_COUNT, SIM_STATE_VERSION, SKILL_EXPLORE, SKILL_SOCIAL, T,
-  type Civilization, type DeadPerson, type EconomyView, type FoundingBuilding, type Household, type Memory, type Person, type PersonView, type PopulationSummary,
+  ACTIVITY_COUNT, Activity, BASE_PRICE, emptyTally, J, JOB_COUNT, N, Phase, R, RESOURCE_COUNT, SIM_STATE_VERSION, SKILL_EXPLORE, SKILL_SOCIAL, T,
+  type Civilization, type DeadPerson, type EconomyView, type FamilyTree, type TreeNode, type FoundingBuilding, type Household, type Memory, type Person, type PersonView, type PopulationSummary,
   type RosterEntry, type SettlementState, type SettlementView, type SimBuilding, type SimEvent, type SimEventType, type SearchHit, type SimSite, type SimState, type Snapshot, type WorldView,
 } from './types';
 
@@ -74,12 +75,18 @@ export class Simulation {
     this.state = state;
     // fields added by later phases get neutral defaults in older states
     state.divine ??= { energy: 100, acts: 0 };
+    state.annals ??= [];
+    if (state.eventSeq === undefined) {
+      state.eventSeq = 0;
+      for (const e of state.events) e.id = ++state.eventSeq;
+    }
     for (const st of state.settlements) {
       st.droughtUntil ??= 0;
       st.stormUntil ??= 0;
       st.blessedUntil ??= 0;
       st.protectedUntil ??= 0;
       st.gameUntil ??= 0;
+      st.tally ??= emptyTally();
     }
     this.rng = new Rng(0);
     this.rng.state = state.rng;
@@ -116,14 +123,14 @@ export class Simulation {
         stock[R.Tools] = 3;
       }
       return { id: s.id, stock, prices: [...BASE_PRICE], treasury: pop ? 250 : 0, forage: 1e9, harvest: 1, projects: [], hungryDays: 0, civ: 0, founded: time, origin: 0, besiegedUntil: 0,
-        droughtUntil: 0, stormUntil: 0, blessedUntil: 0, protectedUntil: 0, gameUntil: 0,
+        droughtUntil: 0, stormUntil: 0, blessedUntil: 0, protectedUntil: 0, gameUntil: 0, tally: emptyTally(),
       };
     });
-    const events: SimEvent[] = settlements.filter((st) => st.treasury > 0).map((st) => ({ t: time, type: 'founded' as const, settlement: st.id }));
+    const events: SimEvent[] = settlements.filter((st) => st.treasury > 0).map((st, i) => ({ id: i + 1, t: time, type: 'founded' as const, settlement: st.id }));
     const state: SimState = {
       version: SIM_STATE_VERSION, time, tick: 0, rng: rng.fork('simulation').state, nextId: founders.nextId,
       persons: founders.persons, households: founders.households, dead: [],
-      buildings, settlements, events, civs: [], religions: [], relations: [], wars: [], armies: [], divine: { energy: 100, acts: 0 }, nextBuildingId: buildings.length + 1, stride: 1,
+      buildings, settlements, events, civs: [], religions: [], relations: [], wars: [], armies: [], divine: { energy: 100, acts: 0 }, annals: [], eventSeq: events.length, nextBuildingId: buildings.length + 1, stride: 1,
     };
     const sim = new Simulation(sites, state);
     for (const st of settlements) {
@@ -307,10 +314,13 @@ export class Simulation {
   // --------------------------------------------------------------- events
   record(e: SimEvent): void {
     const ev = this.state.events;
+    e.id = ++this.state.eventSeq;
+    // every fact remembers which people it concerned at the time
+    if (e.civ === undefined && e.settlement) e.civ = this.settlements.get(e.settlement)?.civ ?? 0;
     ev.push(e);
     if (ev.length > MAX_EVENTS) {
       // keep the milestones, forget the oldest everyday entry
-      const idx = ev.findIndex((x) => x.type === 'birth' || x.type === 'trade' || x.type === 'shortage' || x.type === 'project');
+      const idx = ev.findIndex((x) => x.type === 'birth' || x.type === 'trade' || x.type === 'shortage' || x.type === 'project' || x.type === 'festival' || x.type === 'marriage');
       ev.splice(idx >= 0 ? idx : 0, 1);
     }
   }
@@ -1247,6 +1257,8 @@ export class Simulation {
     }
     mother.pregnantUntil = 0;
     mother.lastBirth = t;
+    const home = this.settlements.get(mother.settlement);
+    if (home) home.tally.births++;
     this.record({ t, type: 'birth', settlement: mother.settlement, a: child.id, b: mother.id, names: [this.nameOf(child), this.nameOf(mother)] });
     this.rosterVersion++;
     return child;
@@ -1273,6 +1285,14 @@ export class Simulation {
         id: p.id, firstName: p.firstName, lastName: p.lastName, sex: p.sex, birth: p.birth, birthPlace: p.birthPlace,
         death: t, cause, settlement: p.settlement, spouse: p.spouse, parents: p.parents, children: p.children, memories: p.memories,
       });
+      const where = this.settlements.get(p.settlement);
+      if (where) {
+        where.tally.deaths++;
+        if (cause === 'age') where.tally.age++;
+        else if (cause === 'battle') where.tally.battle++;
+        else if (cause === 'disaster') where.tally.disaster++;
+        else where.tally.hunger++;
+      }
       this.record({ t, type: 'death', settlement: p.settlement, a: p.id, what: cause, names: [this.nameOf(p)], value: Math.floor(ageAt(p, t)) });
       const hh = this.households.get(p.household);
       if (hh) {
@@ -1547,6 +1567,33 @@ export class Simulation {
       }),
       events: s.events.slice(-500),
       divine: { ...s.divine },
+    };
+  }
+
+  /** The written history of the world (scope 0) or of one people, each sentence tied to its sources. */
+  chronicle(scope: number): Chronicle {
+    return buildChronicle(this.state, scope, (id) => this.sites.get(id)?.name ?? 'une terre lointaine');
+  }
+
+  /** Family of a person over five generations, among the living and the dead. */
+  tree(id: number): FamilyTree | null {
+    const dead = new Map(this.state.dead.map((d) => [d.id, d]));
+    const get = (pid: number) => this.byId.get(pid) ?? dead.get(pid);
+    const node = (pid: number): TreeNode | null => {
+      const p = get(pid);
+      if (!p) return null;
+      return { id: p.id, name: this.nameOf(p), sex: p.sex, birth: p.birth, death: 'death' in p ? p.death : 0, settlement: p.settlement };
+    };
+    const me = get(id);
+    if (!me) return null;
+    const nodes = (ids: number[]) => [...new Set(ids)].map(node).filter((x): x is TreeNode => !!x).sort((a, b) => a.birth - b.birth);
+    const parents = me.parents.filter(Boolean);
+    const grandparents = parents.flatMap((pid) => get(pid)?.parents.filter(Boolean) ?? []);
+    const siblings = parents.flatMap((pid) => get(pid)?.children ?? []).filter((c) => c !== id);
+    const grandchildren = me.children.flatMap((c) => get(c)?.children ?? []);
+    return {
+      self: node(id)!, spouse: me.spouse ? node(me.spouse) : null, parents: nodes(parents), grandparents: nodes(grandparents),
+      siblings: nodes(siblings), children: nodes(me.children), grandchildren: nodes(grandchildren),
     };
   }
 

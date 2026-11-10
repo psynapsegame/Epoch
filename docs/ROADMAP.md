@@ -9,7 +9,7 @@
 | 4 — Le monde historique | Peuples, dirigeants réels, successions, dynasties, coups de force, régimes, cultures transmises, croyances (naissance, diffusion, schisme, extinction), 17 technologies aux effets réels, colonisation, journal historique, archives consultables, cartes politiques | **Livrée** |
 | 5 — Les conflits | Relations entre peuples, alliances, causes de guerre, soldats et levées, armées en marche, sièges, batailles par duels, conquêtes et pillage, traités, occupations, soulèvements et sécessions, carte des guerres | **Livrée** |
 | 6 — Les pouvoirs divins | 14 pouvoirs aux effets réels et persistants (bienfaits, fléaux, remodelage de la planète), ferveur comme ressource, réactions des peuples selon leurs croyances, modifications du monde sauvegardées et rejouées | **Livrée** |
-| 7 — Les chroniques | Archives, généalogies, récits reliés à leurs événements sources | À venir |
+| 7 — Les chroniques | Événements identifiés, annales chiffrées exactes, annales du monde et chroniques des peuples où chaque phrase cite ses sources, récits de vie, arbres généalogiques, export des récits | **Livrée** |
 | 8 — Polissage | Graphismes, animations, performances mobiles (5 000–10 000 individus simulés, rendu agrégé), voie WebGPU, expérience | À venir |
 
 Règle : on ne passe pas à la phase suivante si le socle précédent est cassé (tests + vérification en navigateur).

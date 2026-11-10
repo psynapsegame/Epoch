@@ -787,3 +787,128 @@ describe('divine interventions', () => {
     expect(rel.fervor).toBeGreaterThan(0.7);
   });
 });
+
+import { buildChronicle, chronicleText } from '../src/sim/chronicle';
+
+describe('chronicles, annals and genealogy', () => {
+  // one shared history: three peoples, a few years, a war, a divine act
+  let sim: Simulation;
+  const place = (id: number) => sites.find((s) => s.id === id)?.name ?? '?';
+  beforeAll(() => {
+    const linked = sites.map((s) => (s.id === 1 ? { ...s, neighbors: [{ id: 2, e: 900, n: 0, distance: 900, overSea: false }] }
+      : s.id === 2 ? { ...s, neighbors: [{ id: 1, e: -900, n: 0, distance: 900, overSea: false }] } : s));
+    sim = Simulation.create('alpha', linked, founding, 100, START);
+    sim.setStride(10);
+    sim.run(Math.round((TICKS_PER_DAY * 200) / 10));
+    declareWar(sim, relationOf(sim, 1, 2), sim.state.civs[0], sim.state.civs[1]);
+    applyDivine(sim, { power: 'harvest', settlement: 3, e: 0, n: 0 });
+    sim.kill(sim.person(sim.state.civs[2].leader)!, 'age');
+    sim.run(Math.round((TICKS_PER_DAY * 360 * 2.6) / 10));
+  }, 240000);
+
+  it('gives every recorded event a unique, increasing id and the people it concerned', () => {
+    const ids = sim.state.events.map((e) => e.id!);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (let i = 1; i < ids.length; i++) expect(ids[i]).toBeGreaterThan(ids[i - 1]);
+    expect(sim.state.eventSeq).toBe(ids[ids.length - 1]);
+    for (const e of sim.state.events) if (e.settlement && e.type !== 'faithEnd') expect(e.civ).toBeDefined();
+  });
+
+  it('closes each year in exact annals', () => {
+    const annals = sim.state.annals;
+    expect(annals.length).toBeGreaterThanOrEqual(6);
+    const years = [...new Set(annals.map((a) => a.year))];
+    expect(years).toEqual([1, 2, 3]);
+    // the annals agree with the detailed events of the same year
+    for (const y of years) {
+      const from = (y - 1) * SECONDS_PER_YEAR, to = y * SECONDS_PER_YEAR;
+      const births = sim.state.events.filter((e) => e.type === 'birth' && e.t > from && e.t <= to).length;
+      const deaths = sim.state.events.filter((e) => e.type === 'death' && e.t > from && e.t <= to).length;
+      expect(annals.filter((a) => a.year === y).reduce((s, a) => s + a.births, 0)).toBe(births);
+      expect(annals.filter((a) => a.year === y).reduce((s, a) => s + a.deaths, 0)).toBe(deaths);
+    }
+    for (const a of annals) {
+      expect(a.age + a.hunger + a.battle + a.disaster).toBe(a.deaths);
+      expect(a.pop).toBeGreaterThanOrEqual(0);
+    }
+    // population is consistent from one year to the next (migrations aside, none here)
+    const total = (y: number) => annals.filter((a) => a.year === y).reduce((s, a) => s + a.pop, 0);
+    for (const y of [2, 3]) {
+      const rows = annals.filter((a) => a.year === y);
+      expect(total(y)).toBe(total(y - 1) + rows.reduce((s, a) => s + a.births - a.deaths, 0));
+    }
+  });
+
+  it('writes chronicles in which every sentence rests on recorded sources', () => {
+    for (const scope of [0, 1, 2, 3]) {
+      const ch = buildChronicle(sim.state, scope, place);
+      expect(ch.chapters.length).toBeGreaterThan(0);
+      const eventIds = new Set(sim.state.events.map((e) => e.id));
+      const annalIds = new Set(sim.state.annals.map((a) => a.id));
+      let sentences = 0;
+      for (const chapter of ch.chapters) {
+        expect(chapter.title.length).toBeGreaterThan(5);
+        for (const para of chapter.paragraphs) for (const s of para) {
+          sentences++;
+          expect(s.text.length).toBeGreaterThan(10);
+          expect(s.text).not.toMatch(/undefined|NaN|null|\[object/);
+          expect(s.sources.length + s.annals.length).toBeGreaterThan(0); // never a sentence without a source
+          for (const id of s.sources) { expect(eventIds.has(id)).toBe(true); expect(ch.events[id]).toBeDefined(); }
+          for (const id of s.annals) { expect(annalIds.has(id)).toBe(true); expect(ch.annals[id]).toBeDefined(); }
+          // a sentence that names someone only names people of its source events
+          for (const id of s.sources) {
+            const e = ch.events[id];
+            const people = (e.names ?? []).filter((n) => / /.test(n));
+            const mentioned = sim.state.persons.concat(sim.state.dead as never).map((p) => `${p.firstName} ${p.lastName}`).filter((n) => s.text.includes(n));
+            for (const n of mentioned) expect(people).toContain(n);
+          }
+        }
+      }
+      expect(sentences).toBeGreaterThan(3);
+    }
+  });
+
+  it('tells what happened: the war, the succession, the miracle', () => {
+    const world = chronicleText(buildChronicle(sim.state, 0, place));
+    expect(world).toMatch(/déclara la guerre/);
+    expect(world).toMatch(/enfants? naqui/);
+    const third = buildChronicle(sim.state, 3, place);
+    const text = chronicleText(third);
+    expect(text).toMatch(/champs donnèrent/);
+    expect(third.chapters.length).toBeGreaterThanOrEqual(2); // one chapter per reign: the old ruler, then the successor
+    expect(text).toContain('CHRONIQUE DES');
+    // figures quoted in a reign's summary are exactly those of the annals it cites
+    for (const chapter of third.chapters) {
+      const last = chapter.paragraphs[chapter.paragraphs.length - 1][0];
+      if (!last.annals.length) continue;
+      const births = last.annals.reduce((s, id) => s + third.annals[id].births, 0);
+      expect(last.text).toContain(`${births} enfant`);
+    }
+  });
+
+  it('is deterministic', () => {
+    expect(chronicleText(buildChronicle(sim.state, 1, place))).toBe(chronicleText(buildChronicle(JSON.parse(JSON.stringify(sim.state)), 1, place)));
+  });
+
+  it('reconstructs family trees across the living and the dead', () => {
+    const child = sim.state.persons.find((p) => p.parents[0] && p.parents[1])!;
+    const tree = sim.tree(child.id)!;
+    expect(tree.self.id).toBe(child.id);
+    expect(tree.parents.map((p) => p.id).sort()).toEqual([...child.parents].sort());
+    for (const s of tree.siblings) {
+      const sib = sim.person(s.id) ?? sim.state.dead.find((d) => d.id === s.id)!;
+      expect(sib.parents.some((x) => child.parents.includes(x))).toBe(true);
+    }
+    const parent = sim.person(child.parents[0]) ?? sim.state.dead.find((d) => d.id === child.parents[0])!;
+    const up = sim.tree(parent.id)!;
+    expect(up.children.some((c) => c.id === child.id)).toBe(true);
+    // the dead keep their place in the tree
+    const dead = sim.state.dead.find((d) => d.children.length > 0);
+    if (dead) {
+      const t = sim.tree(dead.id)!;
+      expect(t.self.death).toBeGreaterThan(0);
+      expect(t.children.length).toBe(dead.children.length);
+    }
+    expect(sim.tree(999999)).toBeNull();
+  });
+});

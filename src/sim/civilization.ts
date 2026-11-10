@@ -63,6 +63,7 @@ export function foundCivilization(sim: Simulation, st: SettlementState): Civiliz
   st.civ = id;
   if (!st.origin) st.origin = id;
   st.founded = s.time;
+  for (const e of s.events) if (e.type === 'founded' && e.settlement === st.id && !e.civ) e.civ = id;
   sim.record({ t: s.time, type: 'civ', settlement: st.id, civ: id });
   // a people is recognised by its colours
   for (const p of people) p.look.tunic = (civ.color * 3 + (p.id % 4)) % 10;

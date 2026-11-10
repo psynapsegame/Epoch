@@ -278,3 +278,13 @@ input { -webkit-user-select: text; user-select: text; touch-action: manipulation
 .touch .power { min-height: 56px; }
 .touch .power small { font-size: 12.5px; }
 @media (max-height: 560px) { #armed { top: 58px; } }
+
+/* ---------- chronicles ---------- */
+.chron-title { font-family: var(--serif); font-size: 17px; letter-spacing: 0.08em; color: var(--gold-bright); margin: 14px 0 2px; }
+.chron-sub { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 6px; }
+.chron p { font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif; font-size: 14px; line-height: 1.75; color: #ddd8cc; margin: 0 0 12px; text-align: left; -webkit-user-select: text; user-select: text; }
+.chron p span { cursor: pointer; border-bottom: 1px dotted transparent; transition: background 0.15s; }
+.chron p span:hover, .chron p span.on { background: rgba(201, 168, 106, 0.16); border-bottom-color: var(--gold); }
+.touch .chron p { font-size: 15px; }
+.quote { font-family: Georgia, serif; font-style: italic; color: #ddd8cc; border-left: 2px solid var(--gold); padding: 6px 10px; margin: 8px 0 12px; line-height: 1.6; }
+.bio { font-family: Georgia, serif; font-size: 13.5px; line-height: 1.7; color: #d6d1c5; margin: 0 0 12px; }
