@@ -15,7 +15,7 @@ export const TRADITION_NAMES: Record<string, string> = {
 
 export const BUILDING_NAMES: Record<string, string> = {
   hut: 'Hutte', house: 'Maison', longhouse: 'Grande maison', farm: 'Ferme', barn: 'Grange', market: 'Marché', workshop: 'Atelier',
-  storehouse: 'Entrepôt', temple: 'Temple', well: 'Puits', windmill: 'Moulin', watchtower: 'Tour de guet', dock: 'Ponton', mine: 'Mine',
+  storehouse: 'Entrepôt', temple: 'Temple', well: 'Puits', windmill: 'Moulin', watchtower: 'Tour de guet', dock: 'Ponton', mine: 'Mine', road: 'Route', wall: 'Muraille',
 };
 
 /** One sentence per recorded event of a settlement's journal. */
@@ -26,8 +26,9 @@ export function eventText(e: SimEvent, place: (id: number) => string): string {
     case 'birth': return `Naissance de ${n[0]}, enfant de ${n[1]}`;
     case 'death': return `Mort de ${n[0]} à ${e.value} ans (${e.what === 'age' ? 'vieillesse' : e.what === 'thirst' ? 'soif' : e.what === 'battle' ? 'au combat' : e.what === 'disaster' ? 'dans le fléau' : 'faim'})`;
     case 'marriage': return `Union de ${n[0]} et ${n[1]}`;
-    case 'project': return `Chantier ouvert : ${(BUILDING_NAMES[String(e.what)] ?? '').toLowerCase()}`;
-    case 'built': return `${BUILDING_NAMES[String(e.what)] ?? 'Bâtiment'} achevé${n[0] ? ` (dernière pierre posée par ${n[0]})` : ''}`;
+    case 'project': return `Chantier ouvert : ${(BUILDING_NAMES[String(e.what)] ?? '').toLowerCase()}${(e.what === 'road' || e.what === 'wall') && e.value ? ` de ${e.value} m` : ''}`;
+    case 'built': if (e.what === 'road' || e.what === 'wall') return `${BUILDING_NAMES[String(e.what)]} achevée${n[0] ? ` (dernier ouvrage de ${n[0]})` : ''}`;
+      return `${BUILDING_NAMES[String(e.what)] ?? 'Bâtiment'} achevé${n[0] ? ` (dernière pierre posée par ${n[0]})` : ''}`;
     case 'famine': return `Famine : greniers et garde-manger sont vides`;
     case 'harvest': return (e.value ?? 1) < 1 ? `Mauvaise année pour les récoltes (${Math.round((e.value ?? 1) * 100)} %)` : `Année de récoltes abondantes (${Math.round((e.value ?? 1) * 100)} %)`;
     case 'trade': return `${n[0]} vend ${Math.round(e.value ?? 0)} × ${RESOURCE_LABELS[Number(e.what)].toLowerCase()} à ${place(e.b ?? 0)}`;

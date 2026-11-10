@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { TICK_SECONDS } from './clock';
 import { Simulation } from './simulation';
+import { planWall } from './infrastructure';
 import { applyDivine, type DivineAct } from './divine';
 import type { FoundingBuilding, SimSite, SimState } from './types';
 
@@ -17,6 +18,7 @@ export type ToWorker =
   | { type: 'state'; request: number }
   | { type: 'skip'; seconds: number }
   | { type: 'cancelSkip' }
+  | { type: 'devWall'; settlement: number }
   | { type: 'search'; request: number; query: string }
   | { type: 'divine'; request: number; act: DivineAct }
   | { type: 'chronicle'; request: number; scope: number }
@@ -111,6 +113,12 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
         sim.setStride(30); // coarsest, aggregated simulation while leaping through time
       }
       break;
+    case 'devWall': {
+      // development builds only: opens a wall project at once, to check its drawing
+      const st = import.meta.env.DEV ? sim?.settlement(m.settlement) : undefined;
+      if (sim && st) planWall(sim, st, sim.census(st.id).pop, true);
+      break;
+    }
     case 'cancelSkip':
       endSkip();
       break;

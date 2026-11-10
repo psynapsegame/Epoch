@@ -65,7 +65,7 @@ const NOTABLE = new Set<string>([
   'civ', 'ruler', 'coup', 'government', 'tech', 'religion', 'schism', 'faithEnd', 'colony', 'war', 'peace', 'alliance', 'siege', 'battle',
   'conquest', 'secession', 'famine', 'harvest', 'divine', 'omen', 'built',
 ]);
-const NOTABLE_BUILDINGS = new Set(['temple', 'market', 'mine', 'windmill', 'watchtower', 'dock', 'workshop', 'storehouse', 'longhouse']);
+const NOTABLE_BUILDINGS = new Set(['temple', 'market', 'mine', 'windmill', 'watchtower', 'dock', 'workshop', 'storehouse', 'longhouse', 'wall']);
 
 interface Ctx {
   place: (id: number) => string;
@@ -129,7 +129,7 @@ function tell(e: SimEvent, c: Ctx): string | null {
 
 const BUILT: Record<string, string> = {
   temple: 'son temple', market: 'son marché', mine: 'sa mine', windmill: 'son moulin', watchtower: 'sa tour de guet', dock: 'son ponton',
-  workshop: 'son atelier', storehouse: 'son entrepôt', longhouse: 'sa grande maison',
+  workshop: 'son atelier', storehouse: 'son entrepôt', longhouse: 'sa grande maison', wall: 'sa muraille',
 };
 function articleFor(kind: string): string {
   return BUILT[kind] ?? (BUILDING_NAMES[kind] ?? 'un bâtiment').toLowerCase();

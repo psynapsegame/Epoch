@@ -174,6 +174,11 @@ export class SimClient {
     this.send({ type: 'skip', seconds });
   }
 
+  /** Development builds only: opens a wall project in a settlement. */
+  devWall(settlement: number): void {
+    this.send({ type: 'devWall', settlement });
+  }
+
   cancelSkip(): void {
     this.send({ type: 'cancelSkip' });
   }

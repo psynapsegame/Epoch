@@ -4,6 +4,7 @@ import { civilizationsDaily } from './civilization';
 import { atWar, diplomacyDaily, soldierSlots } from './war';
 import { divineDaily } from './divine';
 import { cellOf } from './pathfinding';
+import { infraCost, isInfra, planRoad, planWall, type Cost } from './infrastructure';
 import { dwellingCapacity } from './sites';
 import type { Simulation } from './simulation';
 import {
@@ -54,6 +55,31 @@ const JOB_TRAITS: number[][] = [
 export const ageAt = (p: Person, time: number) => (time - p.birth) / SECONDS_PER_YEAR;
 export const isAdult = (p: Person, time: number) => { const a = ageAt(p, time); return a >= 14 && a < 68; };
 
+/** What a project costs in all: by its kind, or by its length for roads and walls. */
+export function costOf(b: SimBuilding): Cost {
+  return isInfra(b.kind) ? infraCost(b) : BUILD_COST[b.kind] ?? BUILD_COST.house;
+}
+
+/**
+ * The project a builder works on. One builder in three goes first to roads and
+ * walls, the others to buildings; a site that lacks materials is left for one that does not.
+ */
+export function activeProject(sim: Simulation, st: SettlementState, p: Person): SimBuilding | undefined {
+  let first: SimBuilding | undefined, fallback: SimBuilding | undefined;
+  const infraFirst = p.id % 3 === 0;
+  for (const pass of [0, 1]) {
+    for (const id of st.projects) {
+      const b = sim.building(id);
+      if (!b || (isInfra(b.kind) === infraFirst) !== (pass === 0)) continue;
+      fallback ??= b;
+      const c = costOf(b), slice = 3 / c.hours;
+      if (c.wood * slice <= st.stock[R.Wood] && c.stone * slice <= st.stock[R.Stone] && c.goods * slice <= st.stock[R.Goods]) { first = b; break; }
+    }
+    if (first) break;
+  }
+  return first ?? fallback;
+}
+
 export function countKind(list: SimBuilding[], kind: string): number {
   let n = 0;
   for (const b of list) if (b.kind === kind && b.progress >= 1) n++;
@@ -67,8 +93,8 @@ export function stockTargets(sim: Simulation, st: SettlementState): number[] {
   let needWood = 0, needStone = 0, needGoods = 0;
   for (const id of st.projects) {
     const b = sim.building(id);
-    const c = b && BUILD_COST[b.kind];
-    if (!b || !c) continue;
+    if (!b) continue;
+    const c = costOf(b);
     needWood += c.wood * (1 - b.progress);
     needStone += c.stone * (1 - b.progress);
     needGoods += c.goods * (1 - b.progress);
@@ -241,14 +267,15 @@ export function findSpot(sim: Simulation, site: SimSite, kind: string): { e: num
   const half = (site.size * site.cell) / 2;
   const list = sim.buildingsOf(site.id);
   const base = sim.baseSite(site.id);
+  const infra = sim.infraMask(site.id);
   const clear = (e: number, n: number): boolean => {
-    for (const b of list) if (Math.hypot(b.e - e, b.n - n) < b.radius + radius + 2.5) return false;
+    for (const b of list) if (!isInfra(b.kind) && Math.hypot(b.e - e, b.n - n) < b.radius + radius + 2.5) return false;
     const r = radius * 0.85;
     for (let de = -r; de <= r; de += site.cell) {
       for (let dn = -r; dn <= r; dn += site.cell) {
         if (de * de + dn * dn > r * r) continue;
         const c = cellOf(site, e + de, n + dn);
-        if (c < 0 || !base.walk[c]) return false;
+        if (c < 0 || !base.walk[c] || infra[c]) return false; // nothing is built across a road or a wall
       }
     }
     return true;
@@ -342,9 +369,18 @@ function hasSea(site: SimSite): boolean {
  */
 export function planConstruction(sim: Simulation, st: SettlementState): void {
   const { pop, adults } = sim.census(st.id);
-  if (adults < 3 || st.projects.length >= (pop > 150 ? 2 : 1)) return;
+  if (adults < 3) return;
   const site = sim.site(st.id)!;
   const list = sim.buildingsOf(st.id);
+  // public works: one road or wall at a time, and a pause between two of them
+  const works = st.projects.filter((id) => isInfra(sim.building(id)?.kind ?? '')).length;
+  // a hamlet just founded has more pressing needs than public works
+  if (!works && adults >= 8 && sim.state.time - st.founded > 120 * SECONDS_PER_DAY) {
+    let last = -Infinity;
+    for (const b of list) if (isInfra(b.kind)) last = Math.max(last, b.completed);
+    if (sim.state.time - last > 12 * SECONDS_PER_DAY) planWall(sim, st, pop) ?? planRoad(sim, st, pop);
+  }
+  if (st.projects.filter((id) => !isInfra(sim.building(id)?.kind ?? '')).length >= (pop > 150 ? 2 : 1)) return;
   const has = (k: string) => list.some((b) => b.kind === k);
   const done = (k: string) => countKind(list, k);
   let beds = 0;
@@ -381,7 +417,7 @@ export function planConstruction(sim: Simulation, st: SettlementState): void {
 
 /** A builder's shift: turns stocked materials and hours of work into progress. Returns hours actually used. */
 export function workOnProject(sim: Simulation, st: SettlementState, b: SimBuilding, hours: number, builder: Person): number {
-  const cost = BUILD_COST[b.kind] ?? BUILD_COST.house;
+  const cost = costOf(b);
   let dp = Math.min(1 - b.progress, hours / (cost.hours * sim.mods(st.id).buildHours));
   const need = [[R.Wood, cost.wood], [R.Stone, cost.stone], [R.Goods, cost.goods]] as const;
   let f = 1;
@@ -406,6 +442,8 @@ export function workOnProject(sim: Simulation, st: SettlementState, b: SimBuildi
     sim.remember(builder, { t: sim.state.time, type: 'built', what: b.kind });
     sim.refreshSite(st.id);
     rehouse(sim, st);
+  } else if (b.kind === 'road') {
+    sim.refreshSite(st.id); // the stretch already laid is walked on at once
   } else {
     sim.buildingsVersion++;
   }

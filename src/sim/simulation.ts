@@ -2,12 +2,13 @@ import { Rng, hashString } from '../core/rng';
 import { clamp01 } from '../core/math';
 import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour, seasonPhase } from './clock';
 import { addResearch, contact, foundCivilization, onDeath } from './civilization';
-import { BUILD_COST, ageAt, countKind, dailyUpdate, isAdult, stockTargets, updatePrices, workOnProject } from './economy';
+import { activeProject, costOf, ageAt, countKind, dailyUpdate, isAdult, stockTargets, updatePrices, workOnProject } from './economy';
 import { buildChronicle, type Chronicle } from './chronicle';
 import { marksOf } from './divine';
 import { BASE_MODS, modsFor, type Mods } from './tech';
 import { armiesStep, atWar, relationOf } from './war';
 import { cellOf, findPath, isWalkable, nearestWalkable } from './pathfinding';
+import { INFRA_ROAD, ROAD_SPEED, WALL_PIECE, applyInfra, highwayFactor, isInfra, pathLength, workFront } from './infrastructure';
 import { blankPerson, createPopulation } from './populate';
 import { dwellingCapacity } from './sites';
 import {
@@ -69,6 +70,7 @@ export class Simulation {
   /** Living people by settlement (rebuilt lazily when someone is born, dies or moves away). */
   private residents = new Map<number, Person[]>();
   private residentsDirty = true;
+  private infra = new Map<number, Uint8Array>();
   /** Bumped whenever the set of living people (or their jobs / homes) changes. */
   rosterVersion = 0;
   /** Bumped whenever a building is added or progresses. */
@@ -155,6 +157,18 @@ export class Simulation {
   site(id: number): SimSite | undefined { return this.sites.get(id); }
   /** Settlement map of the bare terrain. */
   baseSite(id: number): SimSite { return this.baseSites.get(id)!; }
+  /** The square of a settlement, where its streets start. */
+  plazaOf(id: number): { e: number; n: number } | undefined { return this.cache.get(id)?.plaza; }
+  /** Cells under a road (1) or a wall (2). */
+  infraMask(id: number): Uint8Array {
+    let m = this.infra.get(id);
+    if (!m) {
+      const site = this.sites.get(id);
+      m = new Uint8Array(site ? site.size * site.size : 0);
+      this.infra.set(id, m);
+    }
+    return m;
+  }
   settlement(id: number): SettlementState | undefined { return this.settlements.get(id); }
   nameOf(p: { firstName: string; lastName: string }): string { return `${p.firstName} ${p.lastName}`; }
   forageCapacity(site: number): number { return this.cache.get(site)?.forageCapacity ?? 0; }
@@ -239,7 +253,7 @@ export class Simulation {
     const half = (site.size * site.cell) / 2;
     const list = this.buildingsOf(id);
     for (const b of list) {
-      if (b.kind === 'dock' || b.kind === 'market' || b.kind === 'farm') continue;
+      if (b.kind === 'dock' || b.kind === 'market' || b.kind === 'farm' || isInfra(b.kind)) continue;
       const r = b.radius * 0.62;
       const i0 = Math.floor((b.e - r + half) / site.cell), i1 = Math.floor((b.e + r + half) / site.cell);
       const j0 = Math.floor((b.n - r + half) / site.cell), j1 = Math.floor((b.n + r + half) / site.cell);
@@ -250,6 +264,7 @@ export class Simulation {
         }
       }
     }
+    applyInfra(site, list, site.walk, this.infraMask(id));
     const done = (k: string) => list.find((b) => b.kind === k && b.progress >= 1);
     const snap = (pt: { e: number; n: number }) => nearestWalkable(site, pt.e, pt.n, 8) ?? pt;
     const well = done('well'), market = done('market'), store = done('storehouse');
@@ -482,6 +497,8 @@ export class Simulation {
   private move(p: Person, site: SimSite, dt: number): void {
     const age = ageAt(p, this.state.time);
     let budget = WALK_SPEED * dt * (age < 10 ? 0.7 : age > 62 ? 0.72 : 1);
+    const here = cellOf(site, p.e, p.n);
+    if (here >= 0 && this.infra.get(site.id)?.[here] === INFRA_ROAD) budget *= ROAD_SPEED; // a made road is easier going
     while (budget > 0 && p.path.length >= 2) {
       const we = p.path[0], wn = p.path[1];
       const d = Math.hypot(we - p.e, wn - p.n);
@@ -656,7 +673,7 @@ export class Simulation {
         break;
       }
       case Activity.Building: {
-        const b = st.projects.length ? this.buildings.get(st.projects[0]) : undefined;
+        const b = activeProject(this, st, p);
         p.counts.shifts++;
         if (b) {
           const hours = 3 * (0.6 + p.skills[J.Builder]) * this.toolBonus(st);
@@ -854,11 +871,11 @@ export class Simulation {
     const nb = site.neighbors.find((x) => x.id === plan.to)!;
     st.stock[plan.res] -= plan.qty;
     p.trip = {
-      to: plan.to, stage: 1, depart: t, arrive: t + nb.distance / TRAVEL_SPEED,
+      to: plan.to, stage: 1, depart: t, arrive: t + nb.distance / (TRAVEL_SPEED * highwayFactor(this, st.id, plan.to)),
       fromE: p.e, fromN: p.n, toE: nb.e, toN: nb.n, res: plan.res, qty: plan.qty,
       owed: st.prices[plan.res] * plan.qty, earned: 0,
     };
-    this.begin(p, Activity.Trading, Phase.Do, nb.distance / TRAVEL_SPEED);
+    this.begin(p, Activity.Trading, Phase.Do, nb.distance / (TRAVEL_SPEED * highwayFactor(this, st.id, plan.to)));
     this.remember(p, { t, type: 'journey', place: this.sites.get(plan.to)?.name });
   }
 
@@ -920,7 +937,7 @@ export class Simulation {
       } else trip.qty = 0;
       trip.stage = 2;
       trip.depart = t;
-      const duration = Math.hypot(trip.toE - trip.fromE, trip.toN - trip.fromN) / TRAVEL_SPEED;
+      const duration = Math.hypot(trip.toE - trip.fromE, trip.toN - trip.fromN) / (TRAVEL_SPEED * highwayFactor(this, p.settlement, trip.to));
       trip.arrive = t + duration;
       p.until = trip.arrive;
       return;
@@ -1173,8 +1190,12 @@ export class Simulation {
         return go(d.e + rng.range(-spread, spread), d.n + rng.range(-spread, spread));
       }
       case Activity.Building: {
-        const b = st.projects.length ? this.buildings.get(st.projects[0]) : undefined;
+        const b = activeProject(this, st, p);
         if (!b) return false;
+        if (isInfra(b.kind)) {
+          const f = workFront(b);
+          return go(f.e + rng.range(-1.5, 1.5), f.n + rng.range(-1.5, 1.5));
+        }
         const a = rng.next() * Math.PI * 2;
         return go(b.e + Math.cos(a) * (b.radius * 0.7 + 1.5), b.n + Math.sin(a) * (b.radius * 0.7 + 1.5));
       }
@@ -1451,7 +1472,7 @@ export class Simulation {
         treasury: st.treasury, forage: st.forage / Math.max(1e-6, this.forageCapacity(st.id)), harvest: st.harvest, jobs,
         projects: st.projects.map((id) => {
           const b = this.buildings.get(id)!;
-          const c = BUILD_COST[b.kind] ?? BUILD_COST.house;
+          const c = costOf(b);
           const left = 1 - b.progress;
           const missing: number[] = [];
           if (c.wood * left > st.stock[R.Wood] + 0.5) missing.push(R.Wood);
@@ -1459,7 +1480,10 @@ export class Simulation {
           if (c.goods * left > st.stock[R.Goods] + 0.5) missing.push(R.Goods);
           return { id, kind: b.kind, progress: b.progress, missing };
         }),
-        buildings: countKindAll(list), housing, civ: st.civ, origin: st.origin, besieged: st.besiegedUntil > s.time, marks: marksOf(st, s.time),
+        buildings: countKindAll(list),
+        roads: Math.round(list.reduce((m, b) => m + (b.kind === 'road' && b.path ? pathLength(b.path) * b.progress : 0), 0)),
+        wall: ((w) => (w ? { stone: w.res === 1, progress: w.progress, length: Math.round(((w.path?.length ?? 0) / 2) * WALL_PIECE), gates: (w.gates?.length ?? 0) / 2 } : null))(list.find((b) => b.kind === 'wall')),
+        housing, civ: st.civ, origin: st.origin, besieged: st.besiegedUntil > s.time, marks: marksOf(st, s.time),
       };
     });
     return { settlements, events: s.events.slice(-60) };
@@ -1728,6 +1752,6 @@ export class Simulation {
 
 function countKindAll(list: SimBuilding[]): number {
   let n = 0;
-  for (const b of list) if (b.progress >= 1) n++;
+  for (const b of list) if (b.progress >= 1 && !isInfra(b.kind)) n++;
   return n;
 }

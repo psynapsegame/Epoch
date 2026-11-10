@@ -134,4 +134,11 @@ Détails : [docs/CHRONICLES.md](docs/CHRONICLES.md).
 
 Mesures et limites : [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
+## Routes et murailles
+
+Les bourgs tracent leurs **rues** et leurs **grands chemins**, et se ceignent d’une **palissade** ou
+d’un **mur de pierre** percé de portes quand ils se sentent menacés. Ce sont de vrais chantiers
+(heures, bois, pierre) aux effets réels : marche et commerce plus rapides, défense renforcée,
+passage par les portes. Détails et limites : [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
+
 Architecture détaillée : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -2,6 +2,7 @@ import { clamp01 } from '../core/math';
 import { DAYS_PER_YEAR, SECONDS_PER_DAY, SECONDS_PER_YEAR } from './clock';
 import { citizens, foundCivilization } from './civilization';
 import { ageAt, countKind, isAdult } from './economy';
+import { wallDefence } from './infrastructure';
 import type { Simulation } from './simulation';
 import {
   J, R, T,
@@ -258,7 +259,7 @@ export function armiesStep(sim: Simulation): void {
       if (members.some((p) => p.trip)) continue;
       if (st.civ === army.civ || !war || war.end) { sendHome(sim, army); continue; }
       // a fortified place is first invested: its people can no longer roam or trade
-      if (countKind(sim.buildingsOf(st.id), 'watchtower') > 0 && sim.census(st.id).pop > 0) {
+      if ((countKind(sim.buildingsOf(st.id), 'watchtower') > 0 || wallDefence(sim, st.id) > 1) && sim.census(st.id).pop > 0) {
         army.state = 'siege';
         army.since = t;
         st.besiegedUntil = t + 6 * SECONDS_PER_DAY;
@@ -269,7 +270,7 @@ export function armiesStep(sim: Simulation): void {
       else if (t >= st.besiegedUntil) beginBattle(sim, army);
     } else if (army.state === 'battle') {
       // home ground, walls of a watchtower, and the hand of the heavens over a protected people
-      const fortified = (countKind(sim.buildingsOf(st.id), 'watchtower') > 0 ? 1.4 : 1.15) * (st.protectedUntil > t ? 2.5 : 1);
+      const fortified = (countKind(sim.buildingsOf(st.id), 'watchtower') > 0 ? 1.4 : 1.15) * wallDefence(sim, st.id) * (st.protectedUntil > t ? 2.5 : 1);
       while (t >= army.nextRound && army.state === 'battle') {
         army.nextRound += ROUND;
         const A = fighters(sim, army.members), D = fighters(sim, army.defenders);

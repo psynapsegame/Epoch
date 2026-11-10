@@ -8,6 +8,7 @@ import type { Building } from '../sim/settlements';
 import { World } from '../world/world';
 import type { WorldData } from '../world/types';
 import { AtmospherePass } from './atmospherePass';
+import { InfraLayer, type InfraItem } from './infraLayer';
 import { BuildingsLayer } from './buildingsLayer';
 import { CameraController } from './cameraController';
 import { DivineFx } from './divineFx';
@@ -71,6 +72,9 @@ export class Engine {
   private terrainMaterial = createTerrainMaterial();
   private treeAssets: TreeAssets = createTreeAssets();
   readonly buildings = new BuildingsLayer();
+  readonly infra = new InfraLayer();
+  private buildingClearings: { dir: THREE.Vector3; radius: number }[] = [];
+  private infraClearings: { dir: THREE.Vector3; radius: number }[] = [];
   readonly people = new PeopleLayer();
   readonly fx = new DivineFx();
   /** Seconds of stormy sky left to show (cosmetic). */
@@ -107,7 +111,7 @@ export class Engine {
     this.scene.add(this.stars);
     this.scene.add(this.planet);
     this.planet.visible = false;
-    this.planet.add(this.ocean, this.clouds, this.buildings.group, this.people.group, this.fx.group);
+    this.planet.add(this.ocean, this.clouds, this.buildings.group, this.infra.group, this.people.group, this.fx.group);
 
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0004;
@@ -182,7 +186,7 @@ export class Engine {
     // Shader variants: every planet material is recompiled with or without EPOCH_LOW.
     const mats: THREE.Material[] = [
       this.terrainMaterial, this.ocean.material as THREE.Material, this.clouds.material as THREE.Material,
-      this.buildings.material, this.people.material, ...this.treeAssets.materials,
+      this.buildings.material, ...this.infra.materials, this.people.material, ...this.treeAssets.materials,
     ];
     const shadowChanged = previous.softShadows !== profile.softShadows || (previous.shadowMapSize > 0) !== (profile.shadowMapSize > 0);
     for (const m of mats) {
@@ -253,6 +257,7 @@ export class Engine {
     this.terrain.invalidate(dir.clone().multiplyScalar(world.R), edit.radius);
     this.terrain.refreshTrees();
     this.buildings.invalidate();
+    this.infra.invalidate();
     if (this.atlasMode !== 'none' && this.atlasTex && !POLITICAL_MODES.includes(this.atlasMode)) buildAtlasTexture(world.data, this.atlasMode, this.atlasTex);
   }
 
@@ -266,7 +271,31 @@ export class Engine {
     if (!this.world || !this.terrain) return;
     if (!this.buildings.sync(this.world, buildings)) return;
     // new plots are cleared of trees
-    this.terrain.setClearings(buildings.map((b) => ({ dir: new THREE.Vector3(b.dir.x, b.dir.y, b.dir.z), radius: b.radius + 5 })));
+    this.buildingClearings = buildings.map((b) => ({ dir: new THREE.Vector3(b.dir.x, b.dir.y, b.dir.z), radius: b.radius + 5 }));
+    this.terrain.setClearings([...this.buildingClearings, ...this.infraClearings]);
+    this.terrain.refreshTrees();
+  }
+
+  /** Mirrors the roads and walls built by the inhabitants. */
+  syncInfra(items: InfraItem[]): void {
+    if (!this.world || !this.terrain) return;
+    if (!this.infra.sync(this.world, items)) return;
+    // trees are felled along a road and where a wall stands
+    this.infraClearings = [];
+    for (const it of items) {
+      const at = (i: number) => new THREE.Vector3(it.points[i * 3], it.points[i * 3 + 1], it.points[i * 3 + 2]);
+      const n = it.points.length / 3;
+      if (it.kind === 'wall') {
+        for (let i = 0; i < n; i += 2) this.infraClearings.push({ dir: at(i), radius: 4.5 });
+        continue;
+      }
+      // a road is only known by its turning points: clear all along each stretch
+      for (let i = 0; i < n - 1; i++) {
+        const a = at(i), b = at(i + 1), steps = Math.max(1, Math.ceil((a.distanceTo(b) * this.world.R) / 6));
+        for (let s = 0; s <= steps; s++) this.infraClearings.push({ dir: a.clone().lerp(b, s / steps).normalize(), radius: 5 });
+      }
+    }
+    this.terrain.setClearings([...this.buildingClearings, ...this.infraClearings]);
     this.terrain.refreshTrees();
   }
 
@@ -340,6 +369,7 @@ export class Engine {
     U.uSunDir.value.set(Math.cos(decl) * Math.cos(hourAngle), Math.sin(decl), Math.cos(decl) * Math.sin(hourAngle)).normalize();
     this.stars.quaternion.setFromAxisAngle(Y, -hourAngle);
     U.uCloudShift.value = (U.uTime.value * 0.0006) % 1;
+    this.infra.update(this.camera.position);
     this.buildings.update(this.camera.position, this.renderer.domElement.height, this.camera.fov);
     this.stormTime = Math.max(0, this.stormTime - dt);
     const cover = this.stormTime > 0 ? 0.82 : 0.44;

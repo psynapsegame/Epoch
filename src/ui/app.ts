@@ -1134,7 +1134,7 @@ export class App {
       <div class="btns">${inhabited.map((x) => `<button class="btn ${x.id === st.id ? 'primary' : ''}" data-site="${x.id}">${esc(nameOf(x.id))}</button>`).join('')}</div>
       <h3>${this.tier(st.population)} de ${esc(nameOf(st.id))}</h3>
       <div class="kv"><span>Habitants</span><b>${st.population} (${st.adults} actifs)</b><span>Logements</span><b>${st.housing} places</b>
-        <span>Bâtiments</span><b>${st.buildings}</b><span>Caisse commune</span><b>${fmt(st.treasury)} pièces</b>
+        <span>Bâtiments</span><b>${st.buildings}</b><span>Routes</span><b>${st.roads ? `${fmt(st.roads)} m` : 'aucune'}</b><span>Muraille</span><b>${st.wall ? `${st.wall.stone ? 'pierre' : 'palissade'}, ${fmt(st.wall.length)} m, ${st.wall.gates} porte${st.wall.gates > 1 ? 's' : ''}${st.wall.progress < 1 ? ` (${fmt(st.wall.progress * 100)} %)` : ''}` : 'aucune'}</b><span>Caisse commune</span><b>${fmt(st.treasury)} pièces</b>
         ${st.marks.length ? `<span>Marques divines</span><b>${st.marks.map((m) => MARK_LABELS[m] ?? m).join(', ')}</b>` : ''}
         <span>Gibier et cueillette</span><b>${fmt(Math.min(1, st.forage) * 100)} %</b><span>Récolte de l’année</span><b>${fmt(st.harvest * 100)} %</b></div>
       <h3>Greniers et prix</h3>${rows}

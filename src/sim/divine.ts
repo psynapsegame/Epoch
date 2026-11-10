@@ -1,6 +1,7 @@
 import { SECONDS_PER_DAY, SECONDS_PER_YEAR } from './clock';
 import { foundReligion } from './civilization';
 import { ageAt } from './economy';
+import { isInfra } from './infrastructure';
 import type { Simulation } from './simulation';
 import { R, T, type Person, type SettlementState, type SimBuilding } from './types';
 
@@ -155,7 +156,7 @@ export function applyDivine(sim: Simulation, act: DivineAct): DivineResult {
   switch (act.power) {
     case 'meteor': {
       if (st) {
-        for (const b of [...sim.buildingsOf(st.id)]) if (near(b, def.radius * 0.5 + b.radius * 0.5)) { removeBuilding(sim, st, b); res.destroyed++; }
+        for (const b of [...sim.buildingsOf(st.id)]) if (!isInfra(b.kind) && near(b, def.radius * 0.5 + b.radius * 0.5)) { removeBuilding(sim, st, b); res.destroyed++; }
         // the blast kills at the heart of the impact; further out, people are thrown down and hurt
         for (const p of people) {
           if (near(p, def.radius * 0.45)) { sim.kill(p, 'disaster'); res.deaths++; }
@@ -168,7 +169,7 @@ export function applyDivine(sim: Simulation, act: DivineAct): DivineResult {
     case 'fire': {
       if (st) {
         for (const b of [...sim.buildingsOf(st.id)]) {
-          if (!near(b, def.radius) || b.kind === 'well' || b.kind === 'mine' || b.kind === 'temple' || b.kind === 'watchtower') continue; // stone stands
+          if (isInfra(b.kind) || !near(b, def.radius) || b.kind === 'well' || b.kind === 'mine' || b.kind === 'temple' || b.kind === 'watchtower') continue; // stone stands
           if (b.kind === 'hut' || sim.rng.next() < 0.25) { removeBuilding(sim, st, b); res.destroyed++; }
           else { damage(st, b, 0.35); res.destroyed++; }
           if (b.kind === 'storehouse' || b.kind === 'barn') st.stock[R.Food] *= 0.5;

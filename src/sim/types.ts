@@ -213,6 +213,14 @@ export interface SimBuilding {
   res: number;
   /** Lifetime output in units (production buildings). */
   produced: number;
+  /**
+   * Roads and walls only, in the settlement's metres: a road's polyline [e0, n0, e1, n1, …]
+   * (res = neighbour it leads to, or -1 for a street), or the centres of a wall's pieces
+   * (res = 1 stone, 0 palisade).
+   */
+  path?: number[];
+  /** Walls only: centres of the gates [e0, n0, …]. */
+  gates?: number[];
 }
 
 export interface SettlementState {
@@ -590,6 +598,9 @@ export interface SettlementView {
   jobs: number[];
   projects: { id: number; kind: string; progress: number; missing: number[] }[];
   buildings: number;
+  /** Metres of finished road, and the wall if any (stone or palisade, progress 0..1, gates). */
+  roads: number;
+  wall: { stone: boolean; progress: number; length: number; gates: number } | null;
   housing: number;
   civ: number;
   origin: number;

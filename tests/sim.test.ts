@@ -10,6 +10,7 @@ import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour } from '../s
 import { Activity, BASE_PRICE, J, N, R, T, type FoundingBuilding, type SimSite } from '../src/sim/types';
 import { addResearch, citizens, civilizationsDaily, enthrone } from '../src/sim/civilization';
 import { BASE_MODS, TECHS, availableTechs, modsFor } from '../src/sim/tech';
+import { INFRA_ROAD, infraCost, pathLength, planRoad, planWall, pointAt, wallDefence } from '../src/sim/infrastructure';
 import { armiesStep, contactBetween, declareWar, diplomacyDaily, relationOf, soldierSlots, strength } from '../src/sim/war';
 
 const TICKS_PER_DAY = SECONDS_PER_DAY / TICK_SECONDS;
@@ -936,4 +937,128 @@ describe('chronicles, annals and genealogy', () => {
     }
     expect(sim.tree(999999)).toBeNull();
   });
+});
+
+describe('roads and walls', () => {
+  const settled = (sim: Simulation) => sim.state.settlements.filter((st) => sim.census(st.id).pop > 0).sort((a, b) => sim.census(b.id).pop - sim.census(a.id).pop)[0];
+  const finish = (sim: Simulation, b: { id: number; progress: number }) => {
+    const st = sim.settlement(sim.building(b.id)!.settlement)!;
+    const builder = sim.state.persons.find((p) => p.settlement === st.id)!;
+    for (let i = 0; i < 4000 && b.progress < 1; i++) {
+      st.stock[R.Wood] = 500;
+      st.stock[R.Stone] = 500;
+      workOnProject(sim, st, sim.building(b.id)!, 6, builder);
+    }
+  };
+
+  it('lays a street from the square along walkable ground, paid in labour and gravel', () => {
+    const sim = fresh();
+    sim.run(TICKS_PER_DAY);
+    const st = settled(sim), site = sim.site(st.id)!;
+    const road = planRoad(sim, st, 40)!;
+    expect(road).toBeTruthy();
+    expect(road.kind).toBe('road');
+    expect(st.projects).toContain(road.id);
+    const path = road.path!;
+    expect(pathLength(path)).toBeGreaterThanOrEqual(12);
+    // starts at the square, never crosses a building or water
+    const plaza = sim.plazaOf(st.id)!;
+    expect(Math.hypot(path[0] - plaza.e, path[1] - plaza.n)).toBeLessThan(13);
+    for (let d = 0; d <= pathLength(path); d += 1) { const p = pointAt(path, d); expect(isWalkable(site, p.e, p.n)).toBe(true); }
+    const cost = infraCost(road);
+    expect(cost.hours).toBeGreaterThan(12);
+    // no road without work: the mask grows only as the builders advance
+    const mask = sim.infraMask(st.id);
+    expect(mask.reduce((a, v) => a + (v === INFRA_ROAD ? 1 : 0), 0)).toBeLessThanOrEqual(1);
+    const stone0 = (st.stock[R.Stone] = 50);
+    const builder = sim.state.persons.find((p) => p.settlement === st.id)!;
+    const used = workOnProject(sim, st, road, cost.hours / 2, builder);
+    expect(used).toBeGreaterThan(0);
+    expect(road.progress).toBeCloseTo(0.5, 1);
+    expect(st.stock[R.Stone]).toBeCloseTo(stone0 - cost.stone * road.progress, 4);
+    const halfCells = mask.reduce((a, v) => a + (v === INFRA_ROAD ? 1 : 0), 0);
+    expect(halfCells).toBeGreaterThan(1);
+    finish(sim, road);
+    expect(road.progress).toBe(1);
+    expect(mask.reduce((a, v) => a + (v === INFRA_ROAD ? 1 : 0), 0)).toBeGreaterThan(halfCells);
+    expect(sim.state.events.some((e) => e.type === 'built' && e.what === 'road' && e.settlement === st.id)).toBe(true);
+    // buildings are not counted with roads, and nothing is built across one
+    expect(sim.economy().settlements.find((x) => x.id === st.id)!.roads).toBe(Math.round(pathLength(path)));
+    // the next street serves another building
+    const second = planRoad(sim, st, 40);
+    if (second) expect(second.path!.join()).not.toBe(path.join());
+  });
+
+  it('makes walking on a road faster', () => {
+    const walk = (withRoad: boolean) => {
+      const sim = fresh();
+      sim.run(TICKS_PER_DAY);
+      const st = settled(sim);
+      const road = planRoad(sim, st, 40)!;
+      if (withRoad) finish(sim, road);
+      const p = sim.state.persons.find((x) => x.settlement === st.id && !x.trip)!;
+      const path = road.path!;
+      p.e = path[0]; p.n = path[1];
+      p.path = path.slice(2);
+      const total = pathLength(path);
+      (sim as unknown as { move: (p: unknown, s: unknown, dt: number) => void }).move(p, sim.site(st.id)!, 600);
+      const left = Math.hypot(p.e - path[path.length - 2], p.n - path[path.length - 1]);
+      return { total, left, done: p.path.length < 2 };
+    };
+    const a = walk(false), b = walk(true);
+    // same person, same time: further along (or already there) on the road
+    expect(b.done || b.left < a.left - 0.5).toBe(true);
+  });
+
+  it('raises a wall with gates that cuts nobody off, and that strengthens the defence', () => {
+    const sim = fresh();
+    sim.run(TICKS_PER_DAY);
+    const st = settled(sim), site = sim.site(st.id)!;
+    const plaza = sim.plazaOf(st.id)!;
+    // every door that could be reached from the square before the wall
+    const doors = sim.buildingsOf(st.id).map((b) => door(b)).filter((d) => isWalkable(site, d.e, d.n) && findPath(site, plaza.e, plaza.n, d.e, d.n));
+    expect(doors.length).toBeGreaterThan(3);
+    expect(planWall(sim, st, 30)).toBeNull(); // a hamlet at peace has no reason to shut itself in
+    const wall = planWall(sim, st, 30, true)!;
+    expect(wall.kind).toBe('wall');
+    expect(wall.path!.length / 2).toBeGreaterThanOrEqual(20);
+    expect(wall.gates!.length / 2).toBeGreaterThanOrEqual(1);
+    expect(planWall(sim, st, 300, true)).toBeNull(); // one wall per town
+    // unfinished, it stops nobody and protects nobody
+    expect(wallDefence(sim, st.id)).toBe(1);
+    const open = site.walk.reduce((a, v) => a + v, 0);
+    finish(sim, wall);
+    expect(wall.progress).toBe(1);
+    expect(site.walk.reduce((a, v) => a + v, 0)).toBeLessThan(open);
+    expect(wallDefence(sim, st.id)).toBeGreaterThan(1);
+    expect(isWalkable(site, wall.path![0], wall.path![1])).toBe(false);
+    for (let i = 0; i < wall.gates!.length; i += 2) expect(isWalkable(site, wall.gates![i], wall.gates![i + 1])).toBe(true);
+    const start = sim.plazaOf(st.id)!;
+    for (const d of doors) expect(findPath(site, start.e, start.n, d.e, d.n)).not.toBeNull();
+    // the ring really closes the ground: leaving the town means walking to a gate
+    const out = { e: plaza.e + 135, n: plaza.n }, straight = Math.hypot(out.e - start.e, out.n - start.n);
+    if (isWalkable(site, out.e, out.n)) {
+      const way = findPath(site, start.e, start.n, out.e, out.n);
+      expect(way).not.toBeNull();
+      expect(pathLength([start.e, start.n, ...way!])).toBeGreaterThanOrEqual(straight - 1e-6);
+    }
+    // life goes on inside and outside, deterministically, across a save
+    const copy = new Simulation(sites, JSON.parse(sim.serializeJson()));
+    sim.run(TICKS_PER_DAY * 3);
+    copy.run(TICKS_PER_DAY * 3);
+    expect(copy.checksum()).toBe(sim.checksum());
+    expect(copy.building(wall.id)!.path).toEqual(wall.path);
+    expect(sim.state.persons.length).toBeGreaterThan(80);
+  });
+
+  it('lets towns decide their own public works over the years', () => {
+    const sim = fresh();
+    sim.setStride(6);
+    sim.run((TICKS_PER_DAY / 6) * 360 * 4);
+    const roads = sim.state.buildings.filter((b) => b.kind === 'road');
+    expect(roads.length).toBeGreaterThan(0);
+    expect(roads.some((b) => b.progress >= 1)).toBe(true);
+    // houses still get built alongside
+    expect(sim.state.events.some((e) => e.type === 'built' && e.what !== 'road' && e.what !== 'wall')).toBe(true);
+  }, 240000);
 });

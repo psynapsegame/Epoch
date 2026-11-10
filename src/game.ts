@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Engine } from './render/engine';
 import { SimClock, SECONDS_PER_DAY, SECONDS_PER_YEAR, SPEEDS, dateOf, seasonPhase } from './sim/clock';
 import { layoutHamlet, type Building, type Settlement } from './sim/settlements';
+import type { InfraItem } from './render/infraLayer';
 import { SimClient, type StateText } from './sim/simClient';
 import { buildSimSite, foundingBuildings, siteFrame } from './sim/sites';
 import { SIM_STATE_VERSION, type SimState } from './sim/types';
@@ -245,9 +246,25 @@ export class Game {
     const tints = new Map<number, number>();
     const w = this.sim.world;
     if (w) for (const c of w.civs) for (const sid of c.settlements) tints.set(sid, CIV_COLORS_HEX[c.color % CIV_COLORS_HEX.length]);
+    const infra: InfraItem[] = [];
+    const dirs = (flat: number[] | undefined, f: ReturnType<typeof siteFrame>): Float32Array => {
+      const out = new Float32Array(((flat?.length ?? 0) / 2) * 3);
+      for (let i = 0; flat && i < flat.length; i += 2) {
+        f.toDir(flat[i], flat[i + 1], R, a);
+        out[(i / 2) * 3] = a.x; out[(i / 2) * 3 + 1] = a.y; out[(i / 2) * 3 + 2] = a.z;
+      }
+      return out;
+    };
     for (const sb of this.sim.buildings) {
       const f = frames.get(sb.settlement);
       if (!f) continue;
+      if (sb.kind === 'road' || sb.kind === 'wall') {
+        // roads and walls are not point buildings: they follow the line the builders traced
+        const points = dirs(sb.path, f), gates = dirs(sb.gates, f);
+        f.toDir(sb.e, sb.n, R, a);
+        infra.push({ id: sb.id, kind: sb.kind, settlement: sb.settlement, progress: sb.progress, res: sb.res, points, gates, centre: { ...a } });
+        continue;
+      }
       f.toDir(sb.e, sb.n, R, a);
       f.toDir(sb.e + sb.fe * 3, sb.n + sb.fn * 3, R, b);
       const fx = b.x - a.x, fy = b.y - a.y, fz = b.z - a.z;
@@ -259,6 +276,7 @@ export class Game {
     }
     this.buildings = list;
     this.engine.syncBuildings(list);
+    this.engine.syncInfra(infra);
     this.onBuildings?.();
   }
 

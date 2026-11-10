@@ -20,7 +20,8 @@ Dit sans détour, par rapport au cahier des charges d’origine :
 
 - **Non vérifié** : fluidité sur téléphones réels, compilation des applications iOS / Android,
   populations au-delà de 3 630 habitants (voir [PERFORMANCE.md](PERFORMANCE.md)).
-- **Non réalisé** : routes, ponts, murailles et châteaux bâtis par les habitants ; navires visibles
+- **Fait depuis** : routes et murailles bâties par les habitants (voir [INFRASTRUCTURE.md](INFRASTRUCTURE.md)).
+- **Non réalisé** : ponts et châteaux ; navires visibles
   (le commerce maritime existe dans la simulation, pas à l’image) ; faune ; voie WebGPU ;
   enrichissement des chroniques par un modèle de langage (point d’extension documenté, non branché).
 - **Rarement observé** : guerres et coups de force spontanés (les mécanismes sont testés en les
