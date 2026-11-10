@@ -45,6 +45,8 @@ export class CameraController {
   lastInput = 0;
   private groundR = 0;
   private moved = 0;
+  /** Called whenever the player moves the focus point (used to stop following someone). */
+  onPan: (() => void) | null = null;
   /** Called on a click that was not a drag. */
   onClick: ((ev: PointerEvent) => void) | null = null;
 
@@ -170,6 +172,7 @@ export class CameraController {
 
   /** Moves the focus point by metres along the camera's right / forward ground axes. */
   pan(right: number, forward: number): void {
+    this.onPan?.();
     const R = this.world?.R ?? 3200;
     const up = this.goalDir;
     const east = new THREE.Vector3().crossVectors(up, Y);

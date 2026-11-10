@@ -6,7 +6,7 @@ joueur-divinité. Paysage, tactile, hors ligne.
 
 > « Avant les royaumes, avant les guerres, avant les légendes, il n’existait qu’un monde. »
 
-Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 1 — le socle visuel.**
+Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 2 — les premiers habitants.**
 
 ## Lancer
 
@@ -55,7 +55,21 @@ génération locale, sauvegardes locales). Guide complet : [docs/MOBILE.md](docs
 - **Mobile** : gestes tactiles, mise en page paysage compacte, paliers de qualité et gouverneur adaptatif,
   cadence d’images économe, PWA hors ligne, projets natifs iOS et Android.
 
-Les sections Population, Civilisations, Économie, Politique, Histoire, Chroniques et Divinité sont
+## Ce que contient la phase 2
+
+- **100 habitants autonomes** répartis en familles dans les hameaux fondateurs : identité, apparence,
+  personnalité (9 traits), besoins (6), savoir-faire, liens, souvenirs datés.
+- **Décisions par utilité** : chacun choisit selon ses besoins, son tempérament, l’heure, la saison et
+  les réserves de son foyer. Cueillette portée au garde-manger, repas, sommeil nocturne, discussions,
+  amitiés et brouilles, exploration, entraide — et la faim tue si la terre ne nourrit plus.
+- **Simulation déterministe dans un Web Worker**, indépendante de l’affichage ; la société entière est
+  sauvegardée et reprend à l’identique.
+- **Rendu instancié** des habitants, sélection au toucher, fiche individuelle vivante, suivi caméra,
+  panneau Population.
+
+Détails : [docs/SIMULATION.md](docs/SIMULATION.md).
+
+Les sections Civilisations, Économie, Politique, Histoire, Chroniques et Divinité sont
 verrouillées dans l’interface tant que leurs systèmes n’existent pas : aucune donnée fictive n’est affichée.
 
 Architecture détaillée : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

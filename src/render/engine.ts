@@ -10,6 +10,7 @@ import type { WorldData } from '../world/types';
 import { AtmospherePass } from './atmospherePass';
 import { BuildingsLayer } from './buildingsLayer';
 import { CameraController } from './cameraController';
+import { PeopleLayer } from './peopleLayer';
 import { createTreeAssets, type TreeAssets } from './models/trees';
 import { createOcean } from './ocean';
 import { U } from './shared';
@@ -31,12 +32,14 @@ export interface PerfStats {
   chunksTotal: number;
   trees: number;
   buildings: number;
+  people: number;
   queue: number;
   geometries: number;
   textures: number;
 }
 
 export type PickResult =
+  | { type: 'person'; id: number }
   | { type: 'building'; building: Building }
   | { type: 'terrain'; cell: number; point: THREE.Vector3 }
   | null;
@@ -51,7 +54,7 @@ export class Engine {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(48, 1, 1, 30000);
   readonly controls: CameraController;
-  readonly perf: PerfStats = { fps: 0, frameMs: 0, drawCalls: 0, triangles: 0, chunks: 0, chunksTotal: 0, trees: 0, buildings: 0, queue: 0, geometries: 0, textures: 0 };
+  readonly perf: PerfStats = { fps: 0, frameMs: 0, drawCalls: 0, triangles: 0, chunks: 0, chunksTotal: 0, trees: 0, buildings: 0, people: 0, queue: 0, geometries: 0, textures: 0 };
   world: World | null = null;
 
   private sceneRT: THREE.WebGLRenderTarget;
@@ -66,6 +69,7 @@ export class Engine {
   private terrainMaterial = createTerrainMaterial();
   private treeAssets: TreeAssets = createTreeAssets();
   readonly buildings = new BuildingsLayer();
+  readonly people = new PeopleLayer();
   private planet = new THREE.Group();
   private atlasTex: THREE.DataTexture | null = null;
   private atlasMode: AtlasMode = 'none';
@@ -98,7 +102,7 @@ export class Engine {
     this.scene.add(this.stars);
     this.scene.add(this.planet);
     this.planet.visible = false;
-    this.planet.add(this.ocean, this.clouds, this.buildings.group);
+    this.planet.add(this.ocean, this.clouds, this.buildings.group, this.people.group);
 
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0004;
@@ -173,7 +177,7 @@ export class Engine {
     // Shader variants: every planet material is recompiled with or without EPOCH_LOW.
     const mats: THREE.Material[] = [
       this.terrainMaterial, this.ocean.material as THREE.Material, this.clouds.material as THREE.Material,
-      this.buildings.material, ...this.treeAssets.materials,
+      this.buildings.material, this.people.material, ...this.treeAssets.materials,
     ];
     const shadowChanged = previous.softShadows !== profile.softShadows || (previous.shadowMapSize > 0) !== (profile.shadowMapSize > 0);
     for (const m of mats) {
@@ -190,6 +194,7 @@ export class Engine {
       }
     }
     this.terrain?.setOptions(this.terrainOptions);
+    this.people.setBudget(profile.peopleBudget);
     this.resize();
   }
 
@@ -248,9 +253,12 @@ export class Engine {
   }
 
   /** What lies under a screen position? */
-  pick(clientX: number, clientY: number): PickResult {
+  pick(clientX: number, clientY: number, touch = false): PickResult {
     if (!this.world) return null;
     const rect = this.canvas.getBoundingClientRect();
+    // Inhabitants first: they are small, so the finger gets a generous radius.
+    const person = this.people.pick(this.camera, rect, clientX, clientY, touch ? 30 : 16);
+    if (person) return { type: 'person', id: person };
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
     const o = this.raycaster.ray.origin, d = this.raycaster.ray.direction;
@@ -354,6 +362,7 @@ export class Engine {
       p.queue = this.terrain.stats.queue;
     }
     p.buildings = this.buildings.count;
+    p.people = this.people.drawn;
   }
 
   /** True while one-off work (terrain construction) inflates frame times. */

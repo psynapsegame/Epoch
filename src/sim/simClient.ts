@@ -1,0 +1,78 @@
+import type { ToWorker } from './sim.worker';
+import type { PersonView, RosterEntry, SimSite, SimState, Snapshot } from './types';
+
+/** Main-thread handle on the simulation worker. */
+export class SimClient {
+  private worker: Worker;
+  private pending = new Map<number, (s: SimState) => void>();
+  private nextRequest = 1;
+  snapshot: Snapshot | null = null;
+  /** performance.now() when the last snapshot arrived. */
+  snapshotAt = 0;
+  lagging = false;
+  roster: RosterEntry[] = [];
+  rosterById = new Map<number, RosterEntry>();
+  /** Most recent full state published by the worker (at most ~10 s old): used by autosave. */
+  lastState: SimState | null = null;
+  onRoster: (() => void) | null = null;
+  onDetail: ((id: number, view: PersonView | null) => void) | null = null;
+
+  constructor() {
+    this.worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
+    this.worker.onmessage = (ev) => {
+      const m = ev.data;
+      switch (m.type) {
+        case 'snapshot':
+          this.snapshot = m.snapshot as Snapshot;
+          this.snapshotAt = performance.now();
+          this.lagging = m.lagging;
+          break;
+        case 'roster':
+          this.roster = m.roster as RosterEntry[];
+          this.rosterById = new Map(this.roster.map((r) => [r.id, r]));
+          this.onRoster?.();
+          break;
+        case 'detail':
+          this.onDetail?.(m.id, m.view);
+          break;
+        case 'state':
+          this.lastState = m.state as SimState;
+          if (m.request) {
+            this.pending.get(m.request)?.(m.state);
+            this.pending.delete(m.request);
+          }
+          break;
+      }
+    };
+  }
+
+  private send(m: ToWorker): void {
+    this.worker.postMessage(m);
+  }
+
+  init(seed: string, sites: SimSite[], population: number, time: number, state?: SimState): void {
+    this.snapshot = null;
+    this.lastState = null;
+    this.roster = [];
+    this.rosterById.clear();
+    this.send({ type: 'init', seed, sites, population, time, state });
+  }
+
+  setRate(rate: number): void {
+    this.send({ type: 'rate', rate });
+  }
+
+  /** Subscribes to live details of one person (0 = none). */
+  watch(id: number): void {
+    this.send({ type: 'watch', id });
+  }
+
+  /** Fetches an exact copy of the current state (for manual saves). */
+  requestState(): Promise<SimState> {
+    return new Promise((resolve) => {
+      const request = this.nextRequest++;
+      this.pending.set(request, resolve);
+      this.send({ type: 'state', request });
+    });
+  }
+}

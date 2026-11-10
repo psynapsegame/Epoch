@@ -32,23 +32,25 @@ export interface QualityProfile {
   /** Translucent blurred UI panels (backdrop-filter is costly on phones). */
   glassUi: boolean;
   textureAnisotropy: number;
+  /** Maximum number of inhabitants drawn at once (all of them are always simulated). */
+  peopleBudget: number;
 }
 
 export const PROFILES: Record<QualityTier, QualityProfile> = {
   low: {
     tier: 'low', pixelRatioCap: 1.25, msaa: 0, bloom: false, shadowMapSize: 0, softShadows: false,
     atmosphereSteps: 6, atmosphereLightSteps: 2, treeGrid: 20, splitFactor: 1.9, maxTerrainLevel: 6,
-    chunkBudgetMs: 3, simpleShaders: true, glassUi: false, textureAnisotropy: 1,
+    chunkBudgetMs: 3, simpleShaders: true, glassUi: false, textureAnisotropy: 1, peopleBudget: 150,
   },
   medium: {
     tier: 'medium', pixelRatioCap: 1.75, msaa: 0, bloom: true, shadowMapSize: 1024, softShadows: false,
     atmosphereSteps: 8, atmosphereLightSteps: 3, treeGrid: 28, splitFactor: 2.2, maxTerrainLevel: 7,
-    chunkBudgetMs: 4, simpleShaders: false, glassUi: false, textureAnisotropy: 2,
+    chunkBudgetMs: 4, simpleShaders: false, glassUi: false, textureAnisotropy: 2, peopleBudget: 300,
   },
   high: {
     tier: 'high', pixelRatioCap: 2, msaa: 4, bloom: true, shadowMapSize: 2048, softShadows: true,
     atmosphereSteps: 10, atmosphereLightSteps: 4, treeGrid: 36, splitFactor: 2.5, maxTerrainLevel: 7,
-    chunkBudgetMs: 5, simpleShaders: false, glassUi: true, textureAnisotropy: 4,
+    chunkBudgetMs: 5, simpleShaders: false, glassUi: true, textureAnisotropy: 4, peopleBudget: 600,
   },
 };
 

@@ -26,8 +26,15 @@ src/
                 worldgen.worker.ts / generateAsync.ts      exécution hors du thread principal
                 world.ts          API de requête : altitude continue, lancer de rayon, description
                 names.ts          toponymie procédurale
-  sim/          clock.ts          horloge historique (360 j/an, 4 saisons, vitesses)
+  sim/          clock.ts          horloge historique (360 j/an, 4 saisons, vitesses, heure locale)
                 settlements.ts    implantation des bâtiments validée contre le terrain
+                types.ts          modèle de données de la société (individus, foyers, souvenirs)
+                sites.ts          carte locale d’un hameau tirée du terrain réel
+                populate.ts       population fondatrice (familles, hérédité)
+                simulation.ts     moteur déterministe : besoins, Utility AI, actions, liens, mort
+                pathfinding.ts    A* + lissage par lignes de vue
+                sim.worker.ts / simClient.ts   exécution dans un Web Worker, instantanés
+                text.ts           souvenirs → phrases (chaque phrase = un événement réel)
   render/       engine.ts         scène, lumière, ombres, post-traitement, picking, diagnostics
                 terrain.ts        quadtree cube-sphère, LOD, culling, forêts instanciées
                 terrainMaterial.ts  shader du sol piloté par les champs du monde
@@ -36,7 +43,7 @@ src/
                 cameraController.ts  caméra orbite ↔ sol (tactile multi-points, souris, clavier)
                 gestures.ts       mathématiques des gestes à deux doigts (pur)
                 quality.ts        paliers de qualité, gouverneur adaptatif, cadence d’images (pur)
-                buildingsLayer.ts · models/ (bâtiments, arbres procéduraux)
+                buildingsLayer.ts · peopleLayer.ts (habitants instanciés) · models/ (bâtiments, arbres)
                 shared.ts         uniforms et GLSL communs, greffe sur MeshStandardMaterial
   persistence/  saveStore.ts      IndexedDB + miroir fichiers natif, format versionné, export/import
   platform/     platform.ts       différences navigateur / PWA / natif (Capacitor), partage, cycle de vie
@@ -46,6 +53,8 @@ src/
 android/ ios/   projets natifs Capacitor (paysage, plein écran)
 tests/          Vitest : générateur, hydrologie, API monde, horloge, RNG, hameaux, sauvegardes, gestes, gouverneur
 ```
+
+Simulation des habitants : voir [SIMULATION.md](SIMULATION.md).
 
 ## Le monde
 
@@ -101,8 +110,8 @@ arrière-plan ; 3 emplacements manuels ; export/import JSON.
   dernier bit entre moteurs. Si l’échange de graines entre navigateurs devient un objectif, il faudra
   des versions logicielles de ces fonctions.
 - Rivières et lacs sont peints sur le terrain creusé (pas de géométrie d’eau dédiée).
-- Les hameaux fondateurs sont posés par le moteur pour valider la chaîne de construction ; dès la
-  phase 3 ce sont les habitants qui décideront quoi bâtir.
+- Les hameaux fondateurs sont posés par le moteur ; dès la phase 3 ce sont les habitants qui
+  décideront quoi bâtir.
 - WebGL2 uniquement pour l’instant ; l’architecture des matériaux est isolée dans `render/` pour une
   future voie WebGPU.
 - Les performances réelles sur téléphone restent à mesurer (voir MOBILE.md).

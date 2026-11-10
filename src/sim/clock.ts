@@ -8,14 +8,30 @@ export const SECONDS_PER_YEAR = SECONDS_PER_DAY * DAYS_PER_YEAR;
 
 export const SEASONS = ['Printemps', 'Été', 'Automne', 'Hiver'] as const;
 
-/** Simulated seconds per real second for each speed step. */
+/**
+ * Simulated seconds per real second for each speed step.
+ * At ×1 a day lasts 8 minutes: slow enough to watch inhabitants walk and work.
+ */
 export const SPEEDS = [
   { label: 'Pause', rate: 0 },
-  { label: '×1', rate: 720 }, // a day in 2 minutes
-  { label: '×6', rate: 4320 }, // a day in 20 seconds
-  { label: '×60', rate: 43200 }, // a day in 2 seconds
-  { label: '×600', rate: 432000 }, // a year in 72 seconds
+  { label: '×1', rate: 180 }, // a day in 8 minutes
+  { label: '×4', rate: 720 }, // a day in 2 minutes
+  { label: '×24', rate: 4320 }, // a day in 20 seconds
+  { label: '×240', rate: 43200 }, // a day in 2 seconds
+  { label: '×2400', rate: 432000 }, // a year in 72 seconds
 ] as const;
+
+/** Fixed simulation step (simulated seconds). Results never depend on the speed setting. */
+export const TICK_SECONDS = 60;
+
+/**
+ * Local solar hour (0..24) at a longitude (radians) for a simulated time.
+ * Single source of truth shared by the simulation (sleep, daylight) and the renderer (sun).
+ */
+export function localHour(time: number, longitude: number): number {
+  const dayFrac = time / SECONDS_PER_DAY;
+  return ((((longitude / (2 * Math.PI) + dayFrac) * 24 + 12) % 24) + 24) % 24;
+}
 
 export interface CalendarDate {
   year: number;

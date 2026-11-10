@@ -1,4 +1,5 @@
 import type { CameraState } from '../render/cameraController';
+import type { SimState } from '../sim/types';
 import { mirrorDelete, mirrorReadAll, mirrorWrite } from '../platform/platform';
 
 /**
@@ -6,7 +7,7 @@ import { mirrorDelete, mirrorReadAll, mirrorWrite } from '../platform/platform';
  * stores the seed plus everything that evolved since creation. The format is
  * versioned so future phases (population, history...) can migrate old saves.
  */
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 export interface SaveData {
   version: number;
@@ -20,6 +21,8 @@ export interface SaveData {
   simTime: number;
   speedIndex: number;
   camera: CameraState;
+  /** The whole society: individuals, families, households, the dead (null in saves older than phase 2). */
+  sim: SimState | null;
 }
 
 export const SAVE_SLOTS = ['auto', 'slot1', 'slot2', 'slot3'] as const;
@@ -53,7 +56,10 @@ function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T
 export function validateSave(data: unknown): SaveData {
   const s = data as Partial<SaveData>;
   if (!s || typeof s !== 'object') throw new Error('Sauvegarde illisible');
-  if (s.version !== SAVE_VERSION) throw new Error(`Version de sauvegarde non prise en charge (${String(s.version)})`);
+  // version 1 (phase 1, no inhabitants) is still readable: the population is founded at load time
+  if (s.version !== SAVE_VERSION && s.version !== 1) throw new Error(`Version de sauvegarde non prise en charge (${String(s.version)})`);
+  const sim = s.version === SAVE_VERSION ? s.sim ?? null : null;
+  if (sim && (!Array.isArray(sim.persons) || !Array.isArray(sim.households) || typeof sim.time !== 'number')) throw new Error('Population illisible');
   if (typeof s.seed !== 'string' || !s.seed) throw new Error('Graine manquante');
   if (typeof s.simTime !== 'number' || !Number.isFinite(s.simTime)) throw new Error('Date invalide');
   if (!s.camera || !Array.isArray(s.camera.dir) || s.camera.dir.length !== 3) throw new Error('Caméra invalide');
@@ -68,6 +74,7 @@ export function validateSave(data: unknown): SaveData {
     simTime: s.simTime,
     speedIndex: typeof s.speedIndex === 'number' ? s.speedIndex : 1,
     camera: s.camera,
+    sim,
   };
 }
 

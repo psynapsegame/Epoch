@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { Engine } from './render/engine';
 import { SimClock, SECONDS_PER_DAY, SPEEDS, dateOf, seasonPhase } from './sim/clock';
 import { layoutHamlet, type Building, type Settlement } from './sim/settlements';
+import { SimClient } from './sim/simClient';
+import { buildSimSite } from './sim/sites';
+import type { SimState } from './sim/types';
 import { Rng, hashString } from './core/rng';
 import { placeName } from './world/names';
 import { generateWorldAsync } from './world/generateAsync';
@@ -15,8 +18,12 @@ import { loadSettings, storeSettings, type Settings } from './settings';
 
 /** Number of founding hamlets raised on the best sites in Phase 1. */
 const FOUNDING_HAMLETS = 6;
-/** Fastest the sun may visibly travel: one day per this many real seconds. */
-const MIN_VISUAL_DAY_SECONDS = 24;
+/** Size of the founding population (phase 2). */
+const FOUNDING_POPULATION = 100;
+/** Up to this speed the sun follows simulated time exactly (a day lasts at least 20 s). */
+const MAX_SYNCED_RATE = 4320;
+/** Beyond it, the sky drifts at one cosmetic day per this many real seconds. */
+const FAST_VISUAL_DAY_SECONDS = 30;
 
 export interface WorldSummary {
   population: number;
@@ -41,6 +48,11 @@ export class Game {
   private worldSum = 0;
   private lastAutosave = 0;
   running = false;
+  /** The living society, in its own thread. */
+  readonly sim = new SimClient();
+  /** Selected inhabitant (0 = none) and whether the camera follows them. */
+  selected = 0;
+  following = false;
   onTick: (() => void) | null = null;
   /** Fired when the governor lowers the quality tier on its own. */
   onQualityChange: ((tier: QualityTier, automatic: boolean) => void) | null = null;
@@ -125,38 +137,46 @@ export class Game {
   }
 
   private frame(dt: number): void {
-    if (this.running) {
-      const simDt = this.clock.advance(dt);
-      const maxDayRate = dt / MIN_VISUAL_DAY_SECONDS;
-      this.visualDay += Math.min(simDt / SECONDS_PER_DAY, maxDayRate);
-      if (performance.now() - this.lastAutosave > 30000) void this.autosave();
+    const sim = this.sim;
+    const snap = sim.snapshot;
+    const rate = this.running ? this.clock.rate : 0;
+    if (snap) {
+      // The simulation thread owns time; between its snapshots we extrapolate briefly for smooth light.
+      const ahead = Math.min(0.3, (performance.now() - sim.snapshotAt) / 1000) * (sim.lagging ? 0 : rate);
+      this.clock.time = Math.max(this.clock.time, snap.time + ahead);
+      if (rate <= MAX_SYNCED_RATE) this.visualDay = this.clock.time / SECONDS_PER_DAY;
+      else this.visualDay += dt / FAST_VISUAL_DAY_SECONDS; // at blurring speeds the sky only drifts
     }
-    this.engine.frame(dt, this.clock.time, this.visualDay);
+    if (this.running && performance.now() - this.lastAutosave > 30000) void this.autosave();
+
+    const e = this.engine;
+    if (this.world) e.people.update(this.world, snap, sim.rosterById, e.camera.position, dt, rate);
+    if (this.following && e.people.selectedKnown) e.controls.goalDir.copy(e.people.selectedPos).normalize();
+    e.frame(dt, this.clock.time, this.visualDay);
     this.onTick?.();
   }
 
-  /** Generates a brand new world from a seed. */
-  async createWorld(seed: string, onProgress: (stage: string, stageIndex: number, p: number) => void): Promise<void> {
+  /** Generates a brand new world from a seed, and founds its first population. */
+  async createWorld(seed: string, onProgress: (stage: string, stageIndex: number, p: number) => void, saved?: SimState, startTime?: number): Promise<void> {
+    this.sim.setRate(0);
     const data = await generateWorldAsync({ seed, width: DEFAULT_WORLD_WIDTH }, onProgress);
     this.worldSum = worldChecksum(data);
     this.world = this.engine.setWorld(data);
     this.governor.hold(performance.now(), 6000);
-    this.clock.time = 7 * 3600;
     this.clock.speedIndex = 1;
     this.foundHamlets();
-    // start with morning light over the best site
-    const site = this.settlements[0]?.dir ?? { x: 1, y: 0.3, z: 0.2 };
-    this.alignSunTo(new THREE.Vector3(site.x, site.y, site.z), 9.5);
-    this.engine.controls.setState({ dir: [site.x, site.y, site.z], distance: 9800, heading: 0, tilt: 0 });
-  }
+    this.select(0);
 
-  /** Sets the visual day so that the local solar time at `dir` is `hour`. */
-  alignSunTo(dir: THREE.Vector3, hour: number): void {
-    const lon = Math.atan2(dir.z, dir.x);
-    // sun longitude = -visualDay * 2π ; local hour = (lon - lonSun)/2π*24 + 12
-    const lonSun = lon - ((hour - 12) / 24) * 2 * Math.PI;
-    const frac = (((-lonSun / (2 * Math.PI)) % 1) + 1) % 1;
-    this.visualDay = Math.floor(this.visualDay) + frac;
+    const sites = this.settlements.map((s) => buildSimSite(this.world!, s, this.buildings));
+    // Dawn of year 1: early morning over the first hamlet.
+    const first = this.settlements[0]?.dir ?? { x: 1, y: 0.3, z: 0.2 };
+    const lon = Math.atan2(first.z, first.x);
+    const start = saved ? saved.time : startTime !== undefined ? startTime : ((((7.2 - 12) / 24 - lon / (2 * Math.PI)) % 1) + 1) % 1 * SECONDS_PER_DAY;
+    this.clock.time = start;
+    this.visualDay = start / SECONDS_PER_DAY;
+    this.engine.people.setSettlements(this.settlements);
+    this.sim.init(seed, sites, FOUNDING_POPULATION, start, saved);
+    this.engine.controls.setState({ dir: [first.x, first.y, first.z], distance: 9800, heading: 0, tilt: 0 });
   }
 
   private foundHamlets(): void {
@@ -177,12 +197,28 @@ export class Game {
     );
   }
 
+  /** Starts or stops the flow of time (the title screen and cinematics keep the world frozen). */
+  setRunning(running: boolean): void {
+    this.running = running;
+    this.sim.setRate(running ? this.clock.rate : 0);
+  }
+
   get summary(): WorldSummary {
-    return { population: 0, civilizations: 0, settlements: this.settlements.length, conflicts: 0 };
+    const s = this.sim.snapshot?.summary;
+    return { population: s?.alive ?? 0, civilizations: 0, settlements: s?.inhabitedSettlements ?? 0, conflicts: 0 };
   }
 
   setSpeed(index: number): void {
     this.clock.speedIndex = Math.max(0, Math.min(SPEEDS.length - 1, index));
+    this.sim.setRate(this.running ? this.clock.rate : 0);
+  }
+
+  /** Selects an inhabitant (0 = none): highlights them and streams their live details. */
+  select(id: number, follow = false): void {
+    this.selected = id;
+    this.following = follow && id !== 0;
+    this.engine.people.selected = id;
+    this.sim.watch(id);
   }
 
   /** Temperature (°C) right now at the camera focus, including the season. */
@@ -197,28 +233,33 @@ export class Game {
   }
 
   // ------------------------------------------------------------ persistence
-  snapshot(slot: string, name?: string): SaveData {
+  /** Builds a save from a simulation state (the state carries the authoritative time). */
+  snapshot(slot: string, state: SimState | null = this.sim.lastState): SaveData {
     if (!this.world) throw new Error('Aucun monde à sauvegarder');
+    const time = state?.time ?? this.clock.time;
     return {
       version: SAVE_VERSION,
       slot,
-      name: name ?? `${this.world.data.seed} — an ${this.date.year}`,
+      name: `${this.world.data.seed} — an ${dateOf(time).year}`,
       savedAt: Date.now(),
       seed: this.world.data.seed,
       worldWidth: this.world.W,
       worldChecksum: this.worldSum,
-      simTime: this.clock.time,
+      simTime: time,
       speedIndex: this.clock.speedIndex,
       camera: this.engine.controls.getState(),
+      sim: state,
     };
   }
 
+  /** Manual save: asks the simulation thread for its exact current state. */
   async save(slot: string): Promise<SaveData> {
-    const s = this.snapshot(slot);
+    const s = this.snapshot(slot, await this.sim.requestState());
     await saveStore.put(s);
     return s;
   }
 
+  /** Background save from the latest state published by the simulation (never blocks, safe at app exit). */
   async autosave(): Promise<void> {
     if (!this.world || !this.running) return;
     this.lastAutosave = performance.now();
@@ -231,10 +272,9 @@ export class Game {
 
   /** Restores a save: regenerates the world from its seed, then reapplies the evolved state. */
   async load(save: SaveData, onProgress: (stage: string, stageIndex: number, p: number) => void): Promise<{ checksumOk: boolean }> {
-    await this.createWorld(save.seed, onProgress);
-    this.clock.time = save.simTime;
-    this.clock.speedIndex = save.speedIndex;
-    this.visualDay = save.simTime / SECONDS_PER_DAY;
+    // a save from before the inhabitants existed keeps its date; its population is founded now
+    await this.createWorld(save.seed, onProgress, save.sim ?? undefined, save.sim ? undefined : save.simTime);
+    this.clock.speedIndex = Math.max(0, Math.min(SPEEDS.length - 1, save.speedIndex));
     this.engine.controls.setState(save.camera);
     return { checksumOk: !save.worldChecksum || save.worldChecksum === this.worldSum };
   }

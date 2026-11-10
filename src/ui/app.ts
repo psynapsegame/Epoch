@@ -6,7 +6,9 @@ import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import './styles.css';
 import type { Game } from '../game';
-import { SEASONS, SPEEDS } from '../sim/clock';
+import { SEASONS, SECONDS_PER_YEAR, SPEEDS } from '../sim/clock';
+import { formatDate, memoryText } from '../sim/text';
+import { ACTIVITY_LABELS, NEED_LABELS, SKILL_LABELS, TRAIT_LABELS, type DeadPerson, type Person, type PersonView } from '../sim/types';
 import type { Building } from '../sim/settlements';
 import type { BuildingKind } from '../render/models/buildings';
 import type { AtlasMode } from '../render/worldTextures';
@@ -28,7 +30,7 @@ const SECTIONS: { id: SectionId; label: string; phase: number }[] = [
   { id: 'chronicles', label: 'Chroniques', phase: 7 },
   { id: 'divinity', label: 'Divinité', phase: 6 },
 ];
-const CURRENT_PHASE = 1;
+const CURRENT_PHASE = 2;
 
 const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
   hut: ['Hutte', 'Abri rudimentaire pour une petite famille.'],
@@ -48,6 +50,7 @@ const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
 
 const QUOTE = ['Avant les royaumes,', ' avant les guerres,', ' avant les légendes,', ' il n’existait qu’un monde.'];
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const fmt = (n: number, d = 0) => n.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
 const el = <T extends HTMLElement>(html: string): T => {
   const t = document.createElement('template');
@@ -73,6 +76,8 @@ export class App {
   private tutorialState = { move: false, zoom: false, rotate: false, inspect: false, atlas: false };
   private camRef: { dir: THREE.Vector3; dist: number; heading: number } | null = null;
   private toastTimer = 0;
+  private inspectorHeld = false;
+  private lastPopulationUpdate = 0;
   private touch: boolean;
 
   constructor(private game: Game) {
@@ -91,8 +96,8 @@ export class App {
     document.body.classList.toggle('touch', this.touch);
     this.applyUiQuality();
     const steps = this.touch
-      ? ['Glisser un doigt pour parcourir le monde', 'Pincer avec deux doigts : de l’orbite jusqu’au sol', 'Tourner deux doigts pour pivoter, les glisser ensemble vers le haut pour incliner', 'Toucher une terre ou un bâtiment pour l’examiner', 'Ouvrir l’Atlas pour lire les données du monde']
-      : ['Glisser avec le clic gauche pour parcourir le monde (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>)', 'Molette : de l’orbite jusqu’au niveau du sol', 'Clic droit glissé : pivoter et incliner (<kbd>Q</kbd><kbd>E</kbd>)', 'Cliquer sur une terre ou un bâtiment pour l’examiner', 'Ouvrir l’Atlas pour lire les données du monde'];
+      ? ['Glisser un doigt pour parcourir le monde', 'Pincer avec deux doigts : de l’orbite jusqu’au sol', 'Tourner deux doigts pour pivoter, les glisser ensemble vers le haut pour incliner', 'Toucher un habitant, un bâtiment ou une terre pour l’examiner', 'Ouvrir l’Atlas pour lire les données du monde']
+      : ['Glisser avec le clic gauche pour parcourir le monde (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>)', 'Molette : de l’orbite jusqu’au niveau du sol', 'Clic droit glissé : pivoter et incliner (<kbd>Q</kbd><kbd>E</kbd>)', 'Cliquer sur un habitant, un bâtiment ou une terre pour l’examiner', 'Ouvrir l’Atlas pour lire les données du monde'];
     const keys = ['move', 'zoom', 'rotate', 'inspect', 'atlas'];
     this.tutorial = el(`<div id="tutorial" class="glass hidden"><h4 class="caps">Premiers pas <button>masquer</button></h4><ul>
       ${steps.map((t, i) => `<li data-k="${keys[i]}">${t}</li>`).join('')}</ul></div>`);
@@ -119,6 +124,18 @@ export class App {
 
     game.engine.controls.onClick = (ev) => this.onWorldClick(ev);
     game.onTick = () => this.tick();
+    game.sim.onDetail = (id, view) => {
+      if (id === game.selected && view && !this.inspectorHeld) this.renderPerson(view);
+    };
+    game.sim.onRoster = () => {
+      if (this.section === 'population') this.renderPopulationPanel();
+      if (this.section === 'world') void this.renderWorldPanel();
+    };
+    game.engine.controls.onPan = () => { game.following = false; };
+    this.inspector.addEventListener('pointerdown', () => (this.inspectorHeld = true));
+    window.addEventListener('pointerup', () => (this.inspectorHeld = false));
+    window.addEventListener('pointercancel', () => (this.inspectorHeld = false));
+    this.inspector.addEventListener('click', (e) => this.onInspectorClick(e));
     game.onQualityChange = (tier, automatic) => {
       this.applyUiQuality();
       if (automatic) this.toast(`Qualité graphique adaptée à l’appareil : ${TIER_LABELS[tier]}`);
@@ -128,7 +145,7 @@ export class App {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       if (e.code === 'F3') { e.preventDefault(); this.perf.classList.toggle('hidden'); }
       if (e.code === 'Space' && game.running) { e.preventDefault(); game.setSpeed(game.clock.speedIndex === 0 ? 1 : 0); }
-      if (e.code === 'Escape') { this.openSection(null); this.inspector.classList.add('closed'); }
+      if (e.code === 'Escape') { this.openSection(null); this.closeInspector(); }
       const n = Number(e.key);
       if (game.running && n >= 1 && n <= SPEEDS.length - 1) game.setSpeed(n);
     });
@@ -218,8 +235,9 @@ export class App {
 
     if (!this.perf.classList.contains('hidden')) {
       const p = g.engine.perf;
-      this.perf.innerHTML = `<b>DIAGNOSTIC</b><br>FPS ${fmt(p.fps)} (cible ${g.pacedFps}) · image ${fmt(p.frameMs, 1)} ms<br>Qualité ${TIER_LABELS[g.tier]} · résolution ${fmt(g.governor.scale * 100)} %<br>Appels de dessin ${fmt(p.drawCalls)}<br>Triangles ${fmt(p.triangles)}<br>Parcelles de terrain ${p.chunks} / ${p.chunksTotal} (file ${p.queue})<br>Arbres affichés ${fmt(p.trees)}<br>Bâtiments ${fmt(p.buildings)}<br>Géométries ${p.geometries} · textures ${p.textures}<br>Individus simulés ${fmt(sum.population)}`;
+      this.perf.innerHTML = `<b>DIAGNOSTIC</b><br>FPS ${fmt(p.fps)} (cible ${g.pacedFps}) · image ${fmt(p.frameMs, 1)} ms<br>Qualité ${TIER_LABELS[g.tier]} · résolution ${fmt(g.governor.scale * 100)} %<br>Appels de dessin ${fmt(p.drawCalls)}<br>Triangles ${fmt(p.triangles)}<br>Parcelles de terrain ${p.chunks} / ${p.chunksTotal} (file ${p.queue})<br>Arbres affichés ${fmt(p.trees)}<br>Bâtiments ${fmt(p.buildings)}<br>Habitants affichés ${fmt(p.people)}${g.sim.lagging ? ' · simulation ralentie' : ''}<br>Géométries ${p.geometries} · textures ${p.textures}<br>Individus simulés ${fmt(sum.population)}`;
     }
+    if (this.section === 'population' && now - this.lastPopulationUpdate > 900) this.updatePopulation();
     this.trackTutorial();
   }
 
@@ -258,6 +276,7 @@ export class App {
     this.nav.querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.id === id));
     this.panel.classList.toggle('closed', id === null);
     if (id === 'world') void this.renderWorldPanel();
+    if (id === 'population') this.renderPopulationPanel();
     if (id === 'atlas') {
       this.tutorialState.atlas = true;
       this.renderAtlasPanel();
@@ -297,8 +316,8 @@ export class App {
       <h3>Continents (${continents.length}) et îles (${islands.length})</h3>
       <div class="list">${w.data.landmasses.slice(0, 8).map((l) => `<button class="row" data-land="${l.id}"><span class="name">${esc(l.name)}</span><small>${l.kind === 'continent' ? 'Continent' : 'Île'} · ${fmt(l.area, 2)} km²</small></button>`).join('')}</div>
       <h3>Hameaux fondateurs</h3>
-      <div class="list">${g.settlements.map((s) => `<button class="row" data-settle="${s.id}"><span class="name">${esc(s.name)}</span><small>${s.buildings.length} bâtiments · inhabité</small></button>`).join('')}</div>
-      <p class="note">Bâtis sur les terres les plus propices du monde (fertilité, eau douce, relief). Leurs premiers habitants arriveront avec la phase 2.</p>
+      <div class="list">${g.settlements.map((s) => `<button class="row" data-settle="${s.id}"><span class="name">${esc(s.name)}</span><small>${s.buildings.length} bâtiments · ${g.sim.roster.filter((r) => r.settlement === s.id).length} habitants</small></button>`).join('')}</div>
+      <p class="note">Bâtis sur les terres les plus propices du monde (fertilité, eau douce, relief). Les familles fondatrices s’y sont installées à l’aube de l’an 1.</p>
       <h3>Terres propices encore vierges</h3>
       <div class="list">${w.data.sites.slice(g.settlements.length, g.settlements.length + 6).map((s, i) => `<button class="row" data-site="${i + g.settlements.length}"><span class="name">Site ${i + 1 + g.settlements.length}</span><small>${[s.riverside ? 'eau douce' : '', s.coastal ? 'côtier' : ''].filter(Boolean).join(' · ') || 'intérieur'} · indice ${fmt(s.score * 100)}</small></button>`).join('')}</div>
       <h3>Sauvegardes</h3>
@@ -377,14 +396,152 @@ export class App {
   }
 
   // ------------------------------------------------------------ inspector
+  private closeInspector(): void {
+    this.inspector.classList.add('closed');
+    this.game.select(0);
+  }
+
   private onWorldClick(ev: PointerEvent): void {
     const g = this.game;
     if (!g.world || !g.running) return;
-    const hit = g.engine.pick(ev.clientX, ev.clientY);
-    if (!hit) { this.inspector.classList.add('closed'); return; }
+    const hit = g.engine.pick(ev.clientX, ev.clientY, ev.pointerType !== 'mouse');
+    if (!hit) { this.closeInspector(); return; }
     this.tutorialState.inspect = true;
+    if (hit.type === 'person') { this.selectPerson(hit.id, false); return; }
+    g.select(0);
     if (hit.type === 'building') this.showBuilding(hit.building);
     else this.showCell(hit.cell);
+  }
+
+  /** Selects an inhabitant and opens their sheet (filled as soon as the simulation answers). */
+  private selectPerson(id: number, travel: boolean): void {
+    const g = this.game;
+    g.select(id, travel);
+    const r = g.sim.rosterById.get(id);
+    this.inspector.innerHTML = `<button class="close" data-a="close">×</button><div class="kicker">Habitant</div><h2>${r ? esc(r.name) : '…'}</h2>`;
+    this.inspector.classList.remove('closed');
+    this.inspector.scrollTop = 0;
+    if (travel && r) {
+      const s = g.settlements.find((x) => x.id === r.settlement);
+      const c = g.engine.controls;
+      if (s && (c.goalDistance > 220 || c.goalDir.angleTo(new THREE.Vector3(s.dir.x, s.dir.y, s.dir.z)) * g.world!.R > 400)) {
+        c.flyTo(new THREE.Vector3(s.dir.x, s.dir.y, s.dir.z), 110, 1.05);
+      }
+    }
+  }
+
+  private onInspectorClick(e: Event): void {
+    const b = (e.target as HTMLElement).closest('button');
+    if (!b) return;
+    const g = this.game;
+    if (b.dataset.a === 'close') this.closeInspector();
+    if (b.dataset.a === 'follow') {
+      g.following = !g.following;
+      b.classList.toggle('primary', g.following);
+      if (g.following && g.engine.controls.goalDistance > 220) g.engine.controls.flyTo(g.engine.controls.goalDir, 110, 1.05);
+    }
+    if (b.dataset.person) this.selectPerson(Number(b.dataset.person), true);
+  }
+
+  private meter(label: string, v: number, cls = ''): string {
+    return `<div class="meter"><span>${label}</span><div class="bar"><i class="${cls || (v < 0.25 ? 'low' : '')}" style="width:${Math.round(clamp01(v) * 100)}%"></i></div><b>${Math.round(clamp01(v) * 100)}</b></div>`;
+  }
+
+  /** Live sheet of an inhabitant (or of someone who died), built only from simulation data. */
+  private renderPerson(v: PersonView): void {
+    const g = this.game;
+    const p = v.person;
+    const female = p.sex === 0;
+    const name = (id: number) => (v.names[id] ? `${esc(v.names[id])}${v.deceased.includes(id) ? ' †' : ''}` : 'inconnu');
+    const link = (id: number, role: string) => (v.names[id] ? `<button class="row" data-person="${id}"><span class="name">${name(id)}</span><small>${role}</small></button>` : '');
+    const years = Math.floor(v.age);
+    let body: string;
+    if (v.alive) {
+      const a = p as Person;
+      const walking = a.phase !== 1;
+      const what = walking && a.activity !== 0 ? `En chemin · ${ACTIVITY_LABELS[a.activity].toLowerCase()}` : ACTIVITY_LABELS[a.activity];
+      const bonds = Object.entries(a.bonds).map(([id, val]) => [Number(id), val] as [number, number])
+        .filter(([id]) => !v.household?.members.includes(id)).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1])).slice(0, 4);
+      const bondLabel = (x: number) => (x >= 0.5 ? (female ? 'Amie' : 'Ami') : x >= 0.15 ? 'Bonne entente' : x <= -0.3 ? 'Brouille' : x < 0 ? 'Froideur' : 'Connaissance');
+      body = `
+        <div class="status"><b>${what}</b><small>${years < 12 ? 'Enfant' : 'Vit de cueillette et de chasse'} · ${a.inside ? 'au foyer' : 'dehors'}${a.carry >= 0.5 ? ` · porte ${fmt(a.carry, 1)} repas` : ''}</small></div>
+        <div class="btns"><button class="btn ${g.following ? 'primary' : ''}" data-a="follow">Suivre</button></div>
+        <h3>Besoins</h3>${NEED_LABELS.map((l, i) => this.meter(l, a.needs[i])).join('')}${this.meter('Santé', a.health)}
+        <h3>Ce qui l’attire maintenant</h3>${v.utilities.slice(0, 3).map((u) => this.meter(ACTIVITY_LABELS[u.activity], Math.min(1, u.score), 'calm')).join('')}
+        <h3>Personnalité</h3>${TRAIT_LABELS.map((l, i) => this.meter(l, a.traits[i], 'calm')).join('')}
+        <h3>Savoir-faire</h3>${SKILL_LABELS.map((l, i) => this.meter(l, a.skills[i], 'calm')).join('')}
+        <h3>Foyer ${v.household ? esc(v.household.name) : ''}</h3>
+        <div class="kv"><span>Réserves</span><b>${v.household ? fmt(v.household.food, 1) : '0'} repas</b></div>
+        ${(v.household?.members ?? []).filter((id) => id !== a.id).map((id) => link(id, id === a.spouse ? (female ? 'Époux' : 'Épouse') : a.children.includes(id) ? 'Enfant' : a.parents.includes(id) ? 'Parent' : 'Foyer')).join('')}
+        ${bonds.length ? `<h3>Liens</h3>${bonds.map(([id, val]) => link(id, bondLabel(val))).join('')}` : ''}`;
+    } else {
+      const d = p as DeadPerson;
+      body = `<div class="status"><b>${female ? 'Morte' : 'Mort'} ${d.cause === 'thirst' ? 'de soif' : 'de faim'}</b><small>${formatDate(d.death)}, à ${years} ans</small></div>
+        <h3>Famille</h3>${[d.spouse, ...d.parents, ...d.children].filter(Boolean).map((id) => link(id, id === d.spouse ? 'Conjoint' : d.children.includes(id) ? 'Enfant' : 'Parent')).join('')}`;
+    }
+    const absent = v.alive ? [p.spouse, ...p.parents].filter((id) => id && !v.household?.members.includes(id)) : [];
+    const html = `<button class="close" data-a="close">×</button>
+      <div class="kicker">${v.alive ? 'Habitant' : 'Archives'} · n° ${p.id}</div>
+      <h2>${esc(p.firstName)} ${esc(p.lastName)}</h2>
+      <div class="sub">${years} an${years > 1 ? 's' : ''} · ${female ? 'femme' : 'homme'} · ${esc(v.settlementName)}</div>
+      ${body}
+      ${absent.length ? `<h3>Famille</h3>${absent.map((id) => link(id, id === p.spouse ? 'Conjoint' : 'Parent')).join('')}` : ''}
+      <h3>Chronologie</h3>
+      <ul class="timeline">${[...p.memories].reverse().slice(0, 14).map((m) => `<li><small>${formatDate(m.t)}</small>${esc(memoryText(m, v.names, female))}</li>`).join('')}</ul>`;
+    const top = this.inspector.scrollTop;
+    this.inspector.innerHTML = html;
+    this.inspector.scrollTop = top;
+    this.inspector.classList.remove('closed');
+  }
+
+  // ----------------------------------------------------------- population
+  private renderPopulationPanel(): void {
+    const g = this.game;
+    this.panel.querySelector('h2')!.textContent = 'Population';
+    const body = this.panel.querySelector('.body')!;
+    const roster = [...g.sim.roster].sort((a, b) => a.settlement - b.settlement || a.name.localeCompare(b.name, 'fr'));
+    let list = '';
+    let current = -1;
+    for (const r of roster) {
+      if (r.settlement !== current) {
+        current = r.settlement;
+        const s = g.settlements.find((x) => x.id === current);
+        list += `<h3>${s ? esc(s.name) : 'Hameau'} — ${roster.filter((x) => x.settlement === current).length} habitants</h3>`;
+      }
+      list += `<button class="row" data-person="${r.id}"><span class="name">${esc(r.name)}</span><small data-act="${r.id}"></small></button>`;
+    }
+    body.innerHTML = `<div id="pop-stats"></div><div class="list" id="pop-list">${list}</div>`;
+    body.querySelector('#pop-list')!.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>('[data-person]');
+      if (b) this.selectPerson(Number(b.dataset.person), true);
+    });
+    this.updatePopulation();
+  }
+
+  /** Refreshes the live figures of the population panel from the latest simulation snapshot. */
+  private updatePopulation(): void {
+    this.lastPopulationUpdate = performance.now();
+    const g = this.game;
+    const snap = g.sim.snapshot;
+    const stats = this.panel.querySelector('#pop-stats');
+    if (!snap || !stats) return;
+    const s = snap.summary;
+    const acts = s.byActivity.map((n, i) => [i, n] as [number, number]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]);
+    stats.innerHTML = `<h3>Société</h3>
+      <div class="kv"><span>Habitants</span><b>${fmt(s.alive)}</b><span>Foyers</span><b>${fmt(s.households)}</b>
+      <span>Réserves des foyers</span><b>${fmt(s.pantryMeals)} repas</b><span>Décès depuis l’an 1</span><b>${fmt(s.deaths)}</b></div>
+      <h3>Besoins moyens</h3>${NEED_LABELS.map((l, i) => this.meter(l, s.avgNeeds[i])).join('')}${this.meter('Santé', s.avgHealth)}
+      <h3>En ce moment</h3>${acts.map(([i, n]) => `<div class="meter"><span>${ACTIVITY_LABELS[i]}</span><div class="bar"><i class="calm" style="width:${(n / Math.max(1, s.alive)) * 100}%"></i></div><b>${n}</b></div>`).join('')}`;
+    const flags = new Map<number, number>();
+    for (let i = 0; i < snap.count; i++) flags.set(snap.ids[i], snap.flags[i]);
+    this.panel.querySelectorAll<HTMLElement>('[data-act]').forEach((el) => {
+      const id = Number(el.dataset.act);
+      const r = g.sim.rosterById.get(id);
+      const f = flags.get(id);
+      if (!r || f === undefined) return;
+      const text = `${Math.floor((snap.time - r.birth) / SECONDS_PER_YEAR)} ans · ${ACTIVITY_LABELS[f & 15]}`;
+      if (el.textContent !== text) el.textContent = text;
+    });
   }
 
   private showCell(cell: number): void {
@@ -396,7 +553,7 @@ export class App {
     const site = w.data.sites.findIndex((s) => Math.abs(s.x - c.x) < 14 && Math.abs(s.y - c.y) < 14);
     const land = c.water !== Water.Ocean;
     const where = c.landmass ? `${c.landmass.kind === 'continent' ? 'Continent' : 'Île'} de ${esc(c.landmass.name)}` : 'Haute mer';
-    this.inspector.innerHTML = `<button class="close">×</button>
+    this.inspector.innerHTML = `<button class="close" data-a="close">×</button>
       <div class="kicker">${land ? 'Terre' : 'Océan'} · ${esc(c.climate)}</div>
       <h2>${esc(c.biomeName)}</h2>
       <div class="sub">${where} · ${fmt(Math.abs(c.latitude), 1)}° ${c.latitude >= 0 ? 'N' : 'S'}, ${fmt(Math.abs(c.longitude), 1)}° ${c.longitude >= 0 ? 'E' : 'O'}</div>
@@ -411,24 +568,23 @@ export class App {
       </div>
       <div class="tags">${c.constraints.map((t) => `<span>${esc(t)}</span>`).join('')}${site >= 0 ? '<span class="good">Terre propice à un village</span>' : ''}${c.water === Water.River ? '<span class="good">Eau douce</span>' : ''}</div>`;
     this.inspector.classList.remove('closed');
-    this.inspector.querySelector('.close')!.addEventListener('click', () => this.inspector.classList.add('closed'));
   }
 
   private showBuilding(b: Building): void {
     const g = this.game;
     const s = g.settlements.find((x) => x.id === b.settlement);
     const [name, desc] = BUILDING_INFO[b.kind];
+    const occupants = g.sim.roster.filter((r) => r.home === b.id);
     const cell = g.world!.cellAt(b.dir.x, b.dir.y, b.dir.z);
     const c = g.world!.describe(cell);
-    this.inspector.innerHTML = `<button class="close">×</button>
+    this.inspector.innerHTML = `<button class="close" data-a="close">×</button>
       <div class="kicker">Bâtiment · n° ${b.id}</div><h2>${name}</h2>
       <div class="sub">${s ? `Hameau de ${esc(s.name)}` : ''}</div>
       <p class="note" style="margin:0 0 12px">${desc}</p>
-      <div class="kv"><span>Occupants</span><b>Aucun</b><span>Production</span><b>À l’arrêt</b>
+      <div class="kv"><span>Occupants</span><b>${occupants.length || 'Aucun'}</b><span>Production</span><b>${occupants.length ? 'Foyer familial' : '—'}</b>
       <span>Terrain</span><b>${esc(c.biomeName)}</b><span>Altitude</span><b>${fmt(c.elevation)} m</b><span>Fertilité alentour</span><b>${fmt(c.fertility * 100)} %</b></div>
-      <p class="note">Ce bâtiment attend ses premiers habitants : la population autonome arrive en phase 2, l’économie en phase 3.</p>`;
+      ${occupants.length ? `<h3>Habitants</h3>${occupants.map((r) => `<button class="row" data-person="${r.id}"><span class="name">${esc(r.name)}</span></button>`).join('')}` : `<p class="note">${['house', 'hut', 'longhouse', 'farm'].includes(b.kind) ? 'Ce logis est encore vide.' : 'Les métiers et la production de ce bâtiment arrivent avec l’économie (phase 3).'}</p>`}`;
     this.inspector.classList.remove('closed');
-    this.inspector.querySelector('.close')!.addEventListener('click', () => this.inspector.classList.add('closed'));
   }
 
   // ---------------------------------------------------------------- intro
@@ -436,7 +592,7 @@ export class App {
     for (const n of [this.topbar, this.nav, this.viewbar]) n.classList.toggle('out', !show);
     if (!show) {
       this.openSection(null);
-      this.inspector.classList.add('closed');
+      this.closeInspector();
       this.tutorial.classList.add('hidden');
     }
   }
@@ -459,7 +615,7 @@ export class App {
   /** Title screen: the quote appears line by line, then the seed form. */
   private showTitle(): void {
     const g = this.game;
-    g.running = false;
+    g.setRunning(false);
     this.hud(false);
     g.engine.controls.cinematic = true;
     this.intro.classList.remove('out', 'reveal');
@@ -516,7 +672,7 @@ export class App {
 
   private async loadSave(save: SaveData): Promise<void> {
     const g = this.game;
-    g.running = false;
+    g.setRunning(false);
     this.hud(false);
     this.intro.classList.remove('out', 'reveal');
     this.beginLoading();
@@ -534,7 +690,7 @@ export class App {
     const g = this.game;
     this.intro.classList.add('out');
     g.engine.controls.cinematic = false;
-    g.running = true;
+    g.setRunning(true);
     this.hud(true);
     // restore the seed form for a later "new world"
     const form = this.intro.querySelector<HTMLElement>('.form')!;
