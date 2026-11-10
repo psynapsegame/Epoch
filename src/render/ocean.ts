@@ -63,7 +63,7 @@ export function createOcean(): THREE.Mesh {
         vec3 R = reflect(-V, N);
         float rUp = max(dot(R, up), 0.0);
         vec3 skyDay = mix(vec3(0.62, 0.76, 0.94), vec3(0.18, 0.38, 0.80), pow(rUp, 0.6));
-        vec3 sky = skyDay * day * mix(vec3(1.0), sunCol, 0.5) + vec3(0.006, 0.009, 0.02);
+        vec3 sky = skyDay * day * mix(vec3(1.0), sunCol, 0.5) + vec3(0.012, 0.02, 0.045);
         sky += vec3(1.0, 0.45, 0.18) * pow(max(dot(R, uSunDir), 0.0), 6.0) * (1.0 - smoothstep(0.0, 0.35, sunUp)) * smoothstep(-0.15, 0.0, sunUp);
         col = mix(col, sky, fres * 0.85);
 

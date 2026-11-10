@@ -126,7 +126,7 @@ export class App {
   private buildTopbar(): void {
     const stats = this.topbar.querySelector('#stats')!;
     const defs: [string, string, string?][] = [
-      ['date', 'Année', 'date'], ['season', 'Saison'], ['hour', 'Heure locale'], ['pop', 'Population'],
+      ['date', 'Année', 'date'], ['season', 'Saison'], ['hour', 'Heure locale', 'opt'], ['pop', 'Population'],
       ['civ', 'Civilisations'], ['city', 'Villes'], ['war', 'Conflits'], ['temp', 'Température'],
     ];
     for (const [id, label, cls] of defs) stats.append(el(`<div class="stat ${cls ?? ''}"><label>${label}</label><b data-s="${id}">—</b></div>`));

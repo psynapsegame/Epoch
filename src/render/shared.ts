@@ -69,7 +69,7 @@ vec3 epochSunTint(float sunUp) {
 vec3 epochAmbient(vec3 up, vec3 n) {
   float sunUp = dot(up, uSunDir);
   float day = smoothstep(-0.18, 0.28, sunUp);
-  vec3 sky = mix(vec3(0.010, 0.014, 0.028), vec3(0.26, 0.36, 0.52), day);
+  vec3 sky = mix(vec3(0.042, 0.060, 0.115), vec3(0.26, 0.36, 0.52), day); // night: soft moonlight
   sky += vec3(0.30, 0.13, 0.05) * smoothstep(-0.2, 0.0, sunUp) * (1.0 - smoothstep(0.0, 0.3, sunUp));
   return sky * (0.55 + 0.45 * dot(n, up));
 }

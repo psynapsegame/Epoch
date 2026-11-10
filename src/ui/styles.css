@@ -31,7 +31,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #brand { display: flex; flex-direction: column; line-height: 1; padding-right: 18px; border-right: 1px solid var(--line-soft); }
 #brand b { font-family: var(--serif); font-weight: 600; font-size: 19px; letter-spacing: 0.34em; color: var(--gold-bright); }
 #brand span { font-size: 8.5px; letter-spacing: 0.42em; color: var(--muted); margin-top: 5px; text-transform: uppercase; }
-#stats { display: flex; gap: 22px; flex: 1; min-width: 0; }
+#stats { display: flex; gap: 22px; flex: 1; min-width: 0; overflow: hidden; }
+#speeds { flex: none; }
+@media (max-width: 1280px) { #stats { gap: 15px; } .stat b { font-size: 13px; } #brand span { display: none; } }
+@media (max-width: 1120px) { .stat.opt { display: none; } }
 .stat { display: flex; flex-direction: column; gap: 3px; white-space: nowrap; }
 .stat label { font-size: 8.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
 .stat b { font-family: var(--serif); font-weight: 400; font-size: 14.5px; color: var(--text); font-variant-numeric: tabular-nums; }
@@ -85,7 +88,7 @@ h3:first-child { margin-top: 2px; }
 .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold), var(--gold-bright)); }
 
 /* ---------- inspector ---------- */
-#inspector { position: absolute; right: 12px; bottom: 70px; width: 300px; padding: 16px 18px; transition: opacity 0.25s, transform 0.25s; }
+#inspector { z-index: 4; background: rgba(14, 15, 18, 0.95); position: absolute; right: 12px; bottom: 70px; width: 300px; padding: 16px 18px; transition: opacity 0.25s, transform 0.25s; }
 #inspector.closed { opacity: 0; transform: translateY(8px); pointer-events: none; }
 #inspector .kicker { font-size: 8.5px; letter-spacing: 0.26em; text-transform: uppercase; color: var(--gold); }
 #inspector h2 { margin: 6px 0 2px; font-family: var(--serif); font-weight: 400; font-size: 18px; letter-spacing: 0.06em; }
@@ -103,11 +106,11 @@ h3:first-child { margin-top: 2px; }
 #viewbar .readout { padding: 0 12px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px; white-space: nowrap; }
 
 /* ---------- perf ---------- */
-#perf { position: absolute; top: 80px; right: 12px; padding: 12px 14px; font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace; color: #b9d7b0; min-width: 190px; }
+#perf { position: absolute; bottom: 66px; left: 80px; padding: 12px 14px; font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace; color: #b9d7b0; min-width: 190px; }
 #perf b { color: var(--gold-bright); font-weight: 400; }
 
 /* ---------- tutorial ---------- */
-#tutorial { position: absolute; left: 80px; bottom: 66px; width: 300px; padding: 14px 16px; }
+#tutorial { position: absolute; right: 12px; top: 80px; width: 300px; padding: 14px 16px; }
 #tutorial h4 { margin: 0 0 9px; font-family: var(--serif); font-weight: 400; font-size: 11px; letter-spacing: 0.26em; color: var(--gold-bright); display: flex; justify-content: space-between; }
 #tutorial h4 button { color: var(--muted); font-size: 10px; letter-spacing: 0.1em; }
 #tutorial li { list-style: none; position: relative; padding: 3px 0 3px 17px; line-height: 1.5; color: var(--muted); transition: color 0.3s; }
