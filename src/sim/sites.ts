@@ -91,7 +91,7 @@ export function buildSimSite(world: World, settlement: Settlement, all: Settleme
     if (o.id === settlement.id) continue;
     const dot = o.dir.x * c.x + o.dir.y * c.y + o.dir.z * c.z;
     const distance = Math.acos(Math.max(-1, Math.min(1, dot))) * R;
-    if (distance > 3600 || dot < 0.3) continue;
+    if (distance > 5200 || dot < 0.3) continue;
     const overSea = d.landmassId[world.cellAt(o.dir.x, o.dir.y, o.dir.z)] !== land;
     // gnomonic projection: straight lines in the local frame are great circles
     const qx = o.dir.x / dot - c.x, qy = o.dir.y / dot - c.y, qz = o.dir.z / dot - c.z;

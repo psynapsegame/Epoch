@@ -93,10 +93,10 @@ export function buildCloudTexture(seed: string, width = 1024): THREE.DataTexture
 
 export type AtlasMode =
   | 'none' | 'elevation' | 'temperature' | 'moisture' | 'fertility' | 'biomes' | 'resources' | 'biodiversity' | 'landmasses'
-  | 'borders' | 'population' | 'religions';
+  | 'borders' | 'population' | 'religions' | 'wars';
 
 /** Maps drawn from the living simulation rather than from the world grid. */
-export const POLITICAL_MODES: AtlasMode[] = ['borders', 'population', 'religions'];
+export const POLITICAL_MODES: AtlasMode[] = ['borders', 'population', 'religions', 'wars'];
 
 /** A settlement's zone of influence to paint on a political map. */
 export interface PoliticalMark {
@@ -120,6 +120,7 @@ export const ATLAS_MODES: { id: AtlasMode; label: string; legend: [string, strin
   { id: 'borders', label: 'Frontières', legend: [] },
   { id: 'population', label: 'Population', legend: [['#5a4424', 'Clairsemée'], ['#ffb347', 'Dense']] },
   { id: 'religions', label: 'Religions', legend: [] },
+  { id: 'wars', label: 'Guerres', legend: [['#c0392b', 'Peuple en guerre'], ['#e67e22', 'Terre occupée'], ['#f1c40f', 'Assiégée'], ['#4a6f8a', 'En paix']] },
 ];
 
 const BIOME_COL: Record<number, [number, number, number]> = {

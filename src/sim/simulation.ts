@@ -4,6 +4,7 @@ import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour, seasonPhase
 import { addResearch, contact, foundCivilization, onDeath } from './civilization';
 import { BUILD_COST, ageAt, countKind, dailyUpdate, isAdult, stockTargets, updatePrices, workOnProject } from './economy';
 import { BASE_MODS, modsFor, type Mods } from './tech';
+import { armiesStep, atWar, relationOf } from './war';
 import { cellOf, findPath, isWalkable, nearestWalkable } from './pathfinding';
 import { blankPerson, createPopulation } from './populate';
 import { dwellingCapacity } from './sites';
@@ -25,7 +26,7 @@ const MAX_EVENTS = 4000;
 const PRODUCER_SHARE = 0.8;
 const BUILDER_WAGE = 0.6; // coins per hour
 /** Main resource produced by each profession (-1: none / varies). */
-const JOB_OUTPUT = [R.Food, R.Food, R.Food, R.Food, R.Wood, R.Stone, -1, R.Tools, R.Goods, -1, -1, -1];
+const JOB_OUTPUT = [R.Food, R.Food, R.Food, R.Food, R.Wood, R.Stone, -1, R.Tools, R.Goods, -1, -1, -1, -1];
 
 interface SiteCache {
   depot: { e: number; n: number };
@@ -104,13 +105,13 @@ export class Simulation {
         stock[R.Stone] = 18;
         stock[R.Tools] = 3;
       }
-      return { id: s.id, stock, prices: [...BASE_PRICE], treasury: pop ? 250 : 0, forage: 1e9, harvest: 1, projects: [], hungryDays: 0, civ: 0, founded: time };
+      return { id: s.id, stock, prices: [...BASE_PRICE], treasury: pop ? 250 : 0, forage: 1e9, harvest: 1, projects: [], hungryDays: 0, civ: 0, founded: time, origin: 0, besiegedUntil: 0 };
     });
     const events: SimEvent[] = settlements.filter((st) => st.treasury > 0).map((st) => ({ t: time, type: 'founded' as const, settlement: st.id }));
     const state: SimState = {
       version: SIM_STATE_VERSION, time, tick: 0, rng: rng.fork('simulation').state, nextId: founders.nextId,
       persons: founders.persons, households: founders.households, dead: [],
-      buildings, settlements, events, civs: [], religions: [], nextBuildingId: buildings.length + 1, stride: 1,
+      buildings, settlements, events, civs: [], religions: [], relations: [], wars: [], armies: [], nextBuildingId: buildings.length + 1, stride: 1,
     };
     const sim = new Simulation(sites, state);
     for (const st of settlements) {
@@ -319,6 +320,7 @@ export class Simulation {
         this.travel(p);
         continue;
       }
+      if (p.army) continue; // under arms: the army decides (see war.ts)
       if (ageAt(p, s.time) < 4) {
         this.infant(p);
         continue;
@@ -338,6 +340,7 @@ export class Simulation {
       }
     }
     if (died) this.bury();
+    armiesStep(this);
     if (Math.floor(s.time / SECONDS_PER_DAY) !== dayBefore) dailyUpdate(this);
     s.rng = this.rng.state;
   }
@@ -378,8 +381,8 @@ export class Simulation {
     if (!(p.activity === Activity.Socializing && p.phase === Phase.Do)) {
       nd[N.Social] = Math.max(0, nd[N.Social] - (dt / (2.5 * SECONDS_PER_DAY)) * (0.6 + 0.8 * p.traits[T.Sociability]));
     }
-    if (p.trip) {
-      // travellers carry provisions and keep each other company
+    if (p.trip || p.army) {
+      // travellers and soldiers on campaign carry provisions and keep each other company
       nd[N.Food] = Math.max(nd[N.Food], 0.5);
       nd[N.Water] = Math.max(nd[N.Water], 0.5);
       nd[N.Sleep] = Math.max(nd[N.Sleep], 0.35);
@@ -472,7 +475,7 @@ export class Simulation {
       case Activity.Wandering: this.begin(p, Activity.Wandering, Phase.Do, (8 + rng.next() * 10) * 60); break;
       case Activity.Playing: this.begin(p, Activity.Playing, Phase.Do, (15 + rng.next() * 20) * 60); break;
       case Activity.Working: {
-        const indoors = p.job === J.Smith || p.job === J.Artisan || p.job === J.Miner || p.job === J.Researcher || p.job === J.Leader;
+        const indoors = p.job !== J.Soldier && (p.job === J.Smith || p.job === J.Artisan || p.job === J.Miner || p.job === J.Researcher || p.job === J.Leader);
         p.inside = indoors;
         this.begin(p, Activity.Working, Phase.Do, (2.7 + rng.next() * 0.6) * HOUR);
         break;
@@ -546,7 +549,7 @@ export class Simulation {
         const q = c >= 0 ? site.forage[c] / 255 : 0.2;
         const cap = this.forageCapacity(site.id);
         // the wild only gives so much: over-gathered land yields less
-        const abundance = Math.max(0.15, Math.min(1, st.forage / (cap * 0.5 + 1e-6)));
+        const abundance = Math.max(0.15, Math.min(1, st.forage / (cap * 0.5 + 1e-6))) * (st.besiegedUntil > t ? 0.3 : 1); // the besieged dare not roam
         const got = (0.8 + 2.8 * q * (0.5 + p.skills[J.Gatherer])) * (0.85 + 0.3 * rng.next()) * this.seasonFactor(site) * abundance * this.mods(site.id).forage;
         st.forage = Math.max(0, st.forage - got);
         p.carry = got;
@@ -694,6 +697,12 @@ export class Simulation {
         stipend(1.5);
         return null;
       }
+      case J.Soldier: {
+        // watch and drill: the arm grows surer
+        p.skills[J.Soldier] = Math.min(1, p.skills[J.Soldier] + 0.004 * (0.5 + p.traits[T.Courage]));
+        stipend(1);
+        return null;
+      }
       case J.Leader: {
         // holding council, settling disputes: a present ruler is a respected one
         const civ = this.civOf(st.id);
@@ -747,6 +756,7 @@ export class Simulation {
   // ------------------------------------------------------------- commerce
   /** A merchant loads surplus goods and sets off for the neighbour that pays best. */
   private planTrade(p: Person, site: SimSite, st: SettlementState): { to: number; res: number; qty: number } | null {
+    if (st.besiegedUntil > this.state.time) return null; // nobody leaves a besieged place
     const targets = stockTargets(this, st);
     const m = this.mods(st.id);
     const port = countKind(this.buildingsOf(st.id), 'dock') > 0;
@@ -755,6 +765,8 @@ export class Simulation {
       const other = this.settlements.get(nb.id);
       if (!other || this.census(nb.id).pop === 0) continue;
       if (nb.overSea && !(m.sailing && port)) continue; // the sea is crossed only by those who can sail
+      if (other.besiegedUntil > this.state.time) continue;
+      if (st.civ && other.civ && st.civ !== other.civ && relationOf(this, st.civ, other.civ).status === 'war') continue; // no trade with the enemy
       for (let r = 0; r < RESOURCE_COUNT; r++) {
         const surplus = st.stock[r] - targets[r];
         if (surplus < 2) continue;
@@ -799,6 +811,13 @@ export class Simulation {
     p.e = trip.fromE + (trip.toE - trip.fromE) * k;
     p.n = trip.fromN + (trip.toN - trip.fromN) * k;
     if (t < trip.arrive) return;
+    if (trip.stage >= 4) {
+      // an army reaches the enemy (4) or comes home (5); war.ts takes over
+      p.e = trip.toE;
+      p.n = trip.toN;
+      p.trip = null;
+      return;
+    }
     if (trip.stage === 3) {
       // colonists reach their new land
       p.e = trip.toE;
@@ -1070,6 +1089,16 @@ export class Simulation {
           const w = cache.water[cache.water.length - 1];
           return w ? go(w.e + rng.range(-3, 3), w.n + rng.range(-3, 3)) : false;
         }
+        if (p.job === J.Soldier) {
+          // patrol: the watchtower, or the edge of the settlement
+          const tower = this.buildingsOf(site.id).find((x) => x.kind === 'watchtower' && x.progress >= 1);
+          if (tower && rng.chance(0.5)) { const d = this.doorOf(tower); return go(d.e + rng.range(-2, 2), d.n + rng.range(-2, 2)); }
+          for (let k = 0; k < 6; k++) {
+            const a = rng.next() * Math.PI * 2, r = site.radius * (0.7 + rng.next() * 0.5);
+            if (isWalkable(site, Math.cos(a) * r, Math.sin(a) * r) && go(Math.cos(a) * r, Math.sin(a) * r)) return true;
+          }
+          return go(cache.plaza.e + rng.range(-4, 4), cache.plaza.n + rng.range(-4, 4));
+        }
         if ((p.job === J.Researcher || p.job === J.Leader) && (!b || b.progress < 1)) return go(cache.plaza.e + rng.range(-3, 3), cache.plaza.n + rng.range(-3, 3));
         if (!b || b.progress < 1) return false;
         if (p.job === J.Smith && (st.stock[R.Iron] < 1 || (st.stock[R.Coal] < 1 && st.stock[R.Wood] < 2))) return false;
@@ -1289,6 +1318,7 @@ export class Simulation {
       avgNeeds: avgNeeds.map((v) => v / n), avgHealth: health / n, pantryMeals: pantry, inhabitedSettlements: inhabited.size,
       births: this.bornSinceFounding(),
       civilizations: s.civs.reduce((a, c) => a + (c.fallen ? 0 : 1), 0),
+      wars: s.wars.reduce((a, w) => a + (w.end ? 0 : 1), 0),
     };
   }
 
@@ -1345,7 +1375,7 @@ export class Simulation {
           if (c.goods * left > st.stock[R.Goods] + 0.5) missing.push(R.Goods);
           return { id, kind: b.kind, progress: b.progress, missing };
         }),
-        buildings: countKindAll(list), housing, civ: st.civ,
+        buildings: countKindAll(list), housing, civ: st.civ, origin: st.origin, besieged: st.besiegedUntil > s.time,
       };
     });
     return { settlements, events: s.events.slice(-60) };
@@ -1365,6 +1395,7 @@ export class Simulation {
     const heads = party.reduce((a, h) => a + h.members.length, 0);
     const popFrom = Math.max(1, this.census(from.id).pop);
     to.civ = from.civ;
+    to.origin = from.civ;
     to.founded = t;
     const take = (r: number, amount: number) => {
       const q = Math.min(from.stock[r] * 0.5, amount);
@@ -1410,6 +1441,48 @@ export class Simulation {
     this.record({ t, type: 'colony', settlement: target, b: from.id, civ: from.civ, value: heads, names });
   }
 
+  // ----------------------------------------------------------- campaigns
+  /** Puts someone under arms and on the road (4 = toward the enemy, 5 = home). */
+  march(p: Person, army: number, stage: 4 | 5, toE: number, toN: number, distance: number): void {
+    const t = this.state.time;
+    if (p.partner > 0) { const o = this.byId.get(p.partner); if (o && o.partner === -p.id) o.partner = 0; }
+    p.partner = 0;
+    p.path = [];
+    p.carry = 0;
+    p.inside = false;
+    p.army = army;
+    const duration = distance / TRAVEL_SPEED;
+    p.trip = { to: 0, stage, depart: t, arrive: t + duration, fromE: p.e, fromN: p.n, toE, toN, res: 0, qty: 0, owed: 0, earned: 0 };
+    this.begin(p, Activity.Fighting, Phase.Do, duration);
+  }
+
+  /** A defender takes position near the heart of the settlement and stands there until released. */
+  hold(p: Person, army: number, offE: number, offN: number): void {
+    const plaza = this.cache.get(p.settlement)?.plaza ?? { e: 0, n: 0 };
+    if (p.partner > 0) { const o = this.byId.get(p.partner); if (o && o.partner === -p.id) o.partner = 0; }
+    p.partner = 0;
+    p.path = [];
+    p.inside = false;
+    p.army = army;
+    p.e = plaza.e + offE;
+    p.n = plaza.n + offN;
+    this.begin(p, Activity.Fighting, Phase.Do, 60 * SECONDS_PER_DAY);
+  }
+
+  /** Back to civilian life. */
+  release(id: number): void {
+    const p = this.byId.get(id);
+    if (!p) return;
+    p.army = 0;
+    p.trip = null;
+    this.begin(p, Activity.Idle, Phase.Do, 0);
+  }
+
+  /** Is this people at war right now? */
+  atWar(civ: number): boolean {
+    return atWar(this, civ);
+  }
+
   /** Political, cultural and religious picture of the world. */
   worldView(): WorldView {
     const s = this.state;
@@ -1428,10 +1501,18 @@ export class Simulation {
           if (p.faith) followers[p.faith] = (followers[p.faith] ?? 0) + 1;
         }
         const leader = this.byId.get(c.leader);
-        return { ...c, population, settlements: own, leaderName: leader ? this.nameOf(leader) : '', followers };
+        let soldiers = 0;
+        for (const p of s.persons) if (p.job === J.Soldier && own.includes(p.settlement)) soldiers++;
+        return { ...c, population, settlements: own, leaderName: leader ? this.nameOf(leader) : '', followers, soldiers };
       }),
       religions: s.religions.map((r) => ({ ...r, followers: faith.get(r.id) ?? 0 })),
       settlements,
+      relations: s.relations,
+      wars: s.wars,
+      armies: s.armies.map((a) => {
+        const p = a.members.map((id) => this.byId.get(id)).find((x) => x);
+        return { id: a.id, civ: a.civ, home: a.home, target: a.target, state: a.state, size: a.members.length, e: p?.e ?? 0, n: p?.n ?? 0 };
+      }),
       events: s.events.slice(-500),
     };
   }
@@ -1514,7 +1595,9 @@ export class Simulation {
     for (const st of this.state.settlements) { for (const v of st.stock) mix(Math.round(v * 1000)); mix(Math.round(st.treasury * 1000)); }
     for (const b of this.state.buildings) mix(Math.round(b.progress * 1e5) + b.id);
     for (const c of this.state.civs) { mix(c.leader); mix(c.techs.length); mix(Math.round(c.legitimacy * 1e6)); mix(Math.round(c.research.progress * 1000)); }
-    for (const p of this.state.persons) mix(p.faith * 7 + p.settlement);
+    for (const p of this.state.persons) mix(p.faith * 7 + p.settlement + p.army * 31);
+    mix(this.state.wars.length * 13 + this.state.armies.length);
+    for (const r of this.state.relations) mix(Math.round(r.opinion * 1e6));
     mix(this.state.tick);
     mix(this.rng.state);
     return h >>> 0;

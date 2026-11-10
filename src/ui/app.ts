@@ -10,9 +10,10 @@ import { SEASONS, SECONDS_PER_YEAR, SPEEDS } from '../sim/clock';
 import { BUILDING_NAMES, TRADITION_NAMES, eventText, formatDate, memoryText } from '../sim/text';
 import { TECHS, TECH_BY_ID } from '../sim/tech';
 import { FAITH_COLORS_HEX, civCss } from '../render/palette';
+import { siteFrame } from '../sim/sites';
 import {
   ACTIVITY_LABELS, CULTURE_AXES, GOVERNMENT_LABELS, JOB_LABELS_F, JOB_LABELS_M, NEED_LABELS, RESOURCE_LABELS, RULER_TITLES, SKILL_LABELS, TRAIT_LABELS,
-  type DeadPerson, type Person, type PersonView, type SimEvent,
+  WAR_CAUSE_LABELS, type DeadPerson, type Person, type PersonView, type SimEvent,
 } from '../sim/types';
 import type { Building } from '../sim/settlements';
 import type { BuildingKind } from '../render/models/buildings';
@@ -91,6 +92,7 @@ export class App {
   private historyFilter = 'all';
   private labels: HTMLElement;
   private labelNodes = new Map<number, HTMLButtonElement>();
+  private frames = new Map<number, ReturnType<typeof siteFrame>>();
   private shownBuilding = 0;
   private touch: boolean;
 
@@ -428,7 +430,7 @@ export class App {
     const mode = e.atlasModes.find((m) => m.id === this.game.atlasMode) ?? e.atlasModes[0];
     body.innerHTML = `<h3>Cartes</h3><div class="list">${e.atlasModes.map((m) => `<button class="row ${m.id === this.game.atlasMode ? 'on' : ''}" data-mode="${m.id}"><span class="name">${m.label}</span></button>`).join('')}</div>
       ${mode.legend.length ? `<h3>Légende</h3><div class="legend">${mode.legend.map(([c, l]) => `<div><i style="background:${c}"></i>${l}</div>`).join('')}</div>` : ''}
-      <p class="note">Chaque carte est tracée à partir des champs réels du monde (grille de ${fmt(this.game.world!.W)} × ${fmt(this.game.world!.H)} cellules). Frontières, population et religions sont peintes d’après la simulation en cours. Commerce et guerres s’ajouteront avec la phase 5.</p>
+      <p class="note">Chaque carte est tracée à partir des champs réels du monde (grille de ${fmt(this.game.world!.W)} × ${fmt(this.game.world!.H)} cellules). Frontières, population, religions et guerres sont peintes d’après la simulation en cours.</p>
       ${this.game.atlasMode === 'borders' || this.game.atlasMode === 'religions' ? `<h3>Légende</h3><div class="legend">${this.game.atlasMode === 'borders' ? (this.game.sim.world?.civs.filter((c) => !c.fallen).map((c) => `<div><i style="background:${civCss(c.color)}"></i>${esc(c.name)}</div>`).join('') ?? '') : (this.game.sim.world?.religions.filter((r) => !r.ended).map((r) => `<div><i style="background:${faithCss(r.id)}"></i>${esc(r.name)}</div>`).join('') ?? '')}</div>` : ''}`;
     body.querySelectorAll<HTMLElement>('[data-mode]').forEach((b) => b.addEventListener('click', () => {
       this.game.setAtlas(b.dataset.mode as AtlasMode);
@@ -523,7 +525,7 @@ export class App {
         ${bonds.length ? `<h3>Liens</h3>${bonds.map(([id, val]) => link(id, bondLabel(val))).join('')}` : ''}`;
     } else {
       const d = p as DeadPerson;
-      body = `<div class="status"><b>${female ? 'Morte' : 'Mort'} ${d.cause === 'thirst' ? 'de soif' : d.cause === 'age' ? 'de vieillesse' : 'de faim'}</b><small>${formatDate(d.death)}, à ${years} ans</small></div>
+      body = `<div class="status"><b>${female ? 'Morte' : 'Mort'} ${d.cause === 'thirst' ? 'de soif' : d.cause === 'age' ? 'de vieillesse' : d.cause === 'battle' ? 'au combat' : 'de faim'}</b><small>${formatDate(d.death)}, à ${years} ans</small></div>
         <h3>Famille</h3>${[d.spouse, ...d.parents, ...d.children].filter(Boolean).map((id) => link(id, id === d.spouse ? 'Conjoint' : d.children.includes(id) ? 'Enfant' : 'Parent')).join('')}`;
     }
     const absent = v.alive ? [p.spouse, ...p.parents].filter((id) => id && !v.household?.members.includes(id)) : [];
@@ -660,8 +662,11 @@ export class App {
       const n = esc(name);
       if (text.includes(n)) text = text.replace(n, `<button data-person="${id}">${n}</button>`);
     };
-    link(e.a, e.names?.[0]);
-    link(e.b, e.type === 'birth' || e.type === 'marriage' || e.type === 'ruler' || e.type === 'coup' ? e.names?.[1] : undefined);
+    const collective = e.type === 'war' || e.type === 'peace' || e.type === 'alliance' || e.type === 'battle' || e.type === 'siege' || e.type === 'conquest' || e.type === 'secession';
+    if (!collective) link(e.a, e.names?.[0]);
+    if (e.type !== 'war' && e.type !== 'peace' && e.type !== 'alliance' && e.type !== 'battle' && e.type !== 'siege' && e.type !== 'conquest' && e.type !== 'secession') {
+      link(e.b, e.type === 'birth' || e.type === 'marriage' || e.type === 'ruler' || e.type === 'coup' ? e.names?.[1] : undefined);
+    }
     return `<li><small>${formatDate(e.t)}${e.settlement ? ` · ${esc(this.placeName(e.settlement))}` : ''}</small>${text}</li>`;
   }
 
@@ -721,7 +726,13 @@ export class App {
     const body = this.panel.querySelector<HTMLElement>('.body')!;
     const w = g.sim.world;
     if (!w) { body.innerHTML = '<p class="note">La simulation démarre…</p>'; return; }
-    const events = w.events.filter((e) => e.type === 'ruler' || e.type === 'coup' || e.type === 'government' || e.type === 'civ' || e.type === 'colony').slice(-25).reverse();
+    const political = new Set(['ruler', 'coup', 'government', 'civ', 'colony', 'war', 'peace', 'alliance', 'battle', 'siege', 'conquest', 'secession']);
+    const events = w.events.filter((e) => political.has(e.type)).slice(-30).reverse();
+    const civName = (id: number) => esc(w.civs.find((c) => c.id === id)?.name ?? '?');
+    const living = new Set(w.civs.filter((c) => !c.fallen).map((c) => c.id));
+    const relations = w.relations.filter((r) => living.has(r.a) && living.has(r.b));
+    const statusLabel = { peace: 'Paix', war: 'Guerre', alliance: 'Alliance' } as const;
+    const wars = [...w.wars].reverse().slice(0, 8);
     const top = body.scrollTop;
     body.innerHTML = `<h3>Pouvoirs en place</h3>
       ${w.civs.filter((c) => !c.fallen).map((c) => {
@@ -732,6 +743,12 @@ export class App {
           ${this.meter('Légitimité', c.legitimacy)}`;
       }).join('<div style="height:8px"></div>')}
       <p class="note">La légitimité suit le sort du peuple (faim, famine), l’habileté du dirigeant et la ferveur partagée. Trop basse, elle ouvre la voie aux usurpateurs et aux révoltes.</p>
+      <h3>Diplomatie</h3>
+      ${relations.length ? relations.map((r) => `<div class="meter"><span>${civName(r.a)} – ${civName(r.b)}<br><small style="color:${r.status === 'war' ? '#e0a08a' : r.status === 'alliance' ? '#a9d59a' : 'var(--dim)'}">${statusLabel[r.status]}${r.status === 'peace' && r.truceUntil > g.clock.time ? ' jurée' : ''} · tension : ${WAR_CAUSE_LABELS[r.tension]}</small></span><div class="bar"><i class="${r.opinion < -0.2 ? 'low' : 'calm'}" style="width:${(r.opinion + 1) * 50}%"></i></div><b>${r.opinion >= 0 ? '+' : ''}${fmt(r.opinion * 100)}</b></div>`).join('') : '<p class="note">Aucun peuple n’en connaît encore un autre.</p>'}
+      <p class="note">L’entente naît du commerce, d’une foi et de mœurs communes ; elle s’use par la proximité des terres, la rivalité de dirigeants agressifs, les querelles de croyance, la convoitise et les blessures des guerres passées.</p>
+      <h3>Forces</h3>${w.civs.filter((c) => !c.fallen).map((c) => `<div class="meter"><span><span class="dot" style="background:${civCss(c.color)}"></span>${esc(c.name)}</span><div class="bar"><i class="calm" style="width:${Math.min(100, (c.soldiers / Math.max(1, c.population)) * 300)}%"></i></div><b>${c.soldiers}</b></div>`).join('')}
+      <p class="note">Soldats sous les armes. Ce sont des habitants : chaque mort au combat est un fils, une mère, un voisin.</p>
+      ${wars.length ? `<h3>Guerres</h3><ul class="timeline">${wars.map((x) => `<li><small>${formatDate(x.start)}${x.end ? ` → ${formatDate(x.end)}` : ' · en cours'}</small>${civName(x.attacker)} contre ${civName(x.defender)} — ${WAR_CAUSE_LABELS[x.cause]}. ${x.battles} bataille${x.battles > 1 ? 's' : ''}, ${x.deathsAttacker + x.deathsDefender} morts${x.takenByAttacker.length + x.takenByDefender.length ? `, ${x.takenByAttacker.length + x.takenByDefender.length} terre(s) prise(s)` : ''}${x.end ? ` — ${x.outcome === 'draw' ? 'sans vainqueur' : `victoire de ${civName(x.outcome === 'attacker' ? x.attacker : x.defender)}`}` : ''}</li>`).join('')}</ul>` : ''}
       <h3>Événements politiques</h3><ul class="timeline">${events.map((e) => this.eventLine(e)).join('') || '<li>Rien encore.</li>'}</ul>`;
     body.scrollTop = top;
     this.bindPanelLinks(body);
@@ -745,10 +762,10 @@ export class App {
     const w = g.sim.world;
     if (!w) { body.innerHTML = '<p class="note">La simulation démarre…</p>'; return; }
     const groups: Record<string, string[]> = {
-      all: [], power: ['civ', 'ruler', 'coup', 'government', 'colony'], mind: ['tech', 'religion', 'schism', 'faithEnd', 'festival'],
+      all: [], power: ['civ', 'ruler', 'coup', 'government', 'colony', 'secession', 'alliance'], war: ['war', 'peace', 'battle', 'siege', 'conquest'], mind: ['tech', 'religion', 'schism', 'faithEnd', 'festival'],
       life: ['birth', 'death', 'marriage'], works: ['built', 'famine', 'harvest', 'trade', 'shortage', 'founded'],
     };
-    const labels: Record<string, string> = { all: 'Grands faits', power: 'Pouvoir', mind: 'Esprit', life: 'Vies', works: 'Travaux' };
+    const labels: Record<string, string> = { all: 'Grands faits', power: 'Pouvoir', war: 'Guerres', mind: 'Esprit', life: 'Vies', works: 'Travaux' };
     const minor = new Set(['birth', 'trade', 'project', 'shortage', 'marriage', 'festival', 'built', 'death', 'harvest']);
     const f = this.historyFilter;
     const events = w.events.filter((e) => (f === 'all' ? !minor.has(e.type) : groups[f].includes(e.type))).slice(-70).reverse();
@@ -817,6 +834,41 @@ export class App {
       node.style.transform = `translate(-50%, -100%) translate(${((v.x * 0.5 + 0.5) * rect.width).toFixed(1)}px, ${((-v.y * 0.5 + 0.5) * rect.height).toFixed(1)}px)`;
       node.style.display = '';
     }
+    // armies in the field
+    for (const army of w.armies) {
+      const home = g.settlements.find((x) => x.id === army.home);
+      if (!home) continue;
+      let frame = this.frames.get(home.id);
+      if (!frame) this.frames.set(home.id, (frame = siteFrame(home)));
+      const d = { x: 0, y: 0, z: 0 };
+      frame.toDir(army.e, army.n, g.world.R, d);
+      v.set(d.x, d.y, d.z);
+      if (Math.acos(Math.min(1, v.dot(cam.position) / camLen)) >= horizon) continue;
+      v.multiplyScalar(g.world.R + 45).project(cam);
+      if (v.z > 1 || Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1) continue;
+      const key = -army.id;
+      seen.add(key);
+      let node = this.labelNodes.get(key);
+      if (!node) {
+        node = document.createElement('button');
+        node.addEventListener('click', () => {
+          const f = this.frames.get(army.home);
+          const a = g.sim.world?.armies.find((x) => x.id === army.id);
+          if (!f || !a) return;
+          const p = { x: 0, y: 0, z: 0 };
+          f.toDir(a.e, a.n, g.world!.R, p);
+          g.engine.controls.flyTo(new THREE.Vector3(p.x, p.y, p.z), 110, 1.05);
+        });
+        this.labels.append(node);
+        this.labelNodes.set(key, node);
+      }
+      const civ = w.civs.find((c) => c.id === army.civ);
+      const what = army.state === 'siege' ? 'siège' : army.state === 'battle' ? 'bataille' : army.state === 'return' ? 'retour' : 'en marche';
+      const html = `<span class="dot" style="background:${civ ? civCss(civ.color) : '#777'}"></span>⚔ ${esc(civ?.name ?? '')}<small>${army.size} · ${what}</small>`;
+      if (node.dataset.html !== html) { node.innerHTML = html; node.dataset.html = html; }
+      node.style.transform = `translate(-50%, -100%) translate(${((v.x * 0.5 + 0.5) * rect.width).toFixed(1)}px, ${((-v.y * 0.5 + 0.5) * rect.height).toFixed(1)}px)`;
+      node.style.display = '';
+    }
     for (const [id, node] of this.labelNodes) if (!seen.has(id)) node.style.display = 'none';
   }
 
@@ -875,6 +927,7 @@ export class App {
       this.tutorial.classList.add('hidden');
       for (const n of this.labelNodes.values()) n.remove();
       this.labelNodes.clear();
+      this.frames.clear();
     }
   }
 

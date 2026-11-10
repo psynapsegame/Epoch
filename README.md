@@ -6,7 +6,7 @@ joueur-divinité. Paysage, tactile, hors ligne.
 
 > « Avant les royaumes, avant les guerres, avant les légendes, il n’existait qu’un monde. »
 
-Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 4 — le monde historique.**
+Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 5 — les conflits.**
 
 ## Lancer
 
@@ -95,6 +95,14 @@ Détails : [docs/ECONOMY.md](docs/ECONOMY.md).
   population et des religions.
 
 Détails : [docs/CIVILIZATIONS.md](docs/CIVILIZATIONS.md).
+
+## Ce que contient la phase 5
+
+- **Diplomatie** : opinion entre peuples, alliances, causes de tension réelles.
+- **Guerres** : levées de soldats, armées qui marchent, sièges, batailles où meurent de vrais
+  habitants, conquêtes, traités de paix, soulèvements et sécessions.
+
+Détails : [docs/WAR.md](docs/WAR.md).
 
 Les sections Chroniques et Divinité sont
 verrouillées dans l’interface tant que leurs systèmes n’existent pas : aucune donnée fictive n’est affichée.

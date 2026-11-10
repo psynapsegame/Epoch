@@ -1,6 +1,6 @@
 import { dateOf } from './clock';
 import { TECH_BY_ID } from './tech';
-import { GOVERNMENT_LABELS, JOB_LABELS_F, JOB_LABELS_M, RESOURCE_LABELS, type Government, type Memory, type SimEvent } from './types';
+import { GOVERNMENT_LABELS, JOB_LABELS_F, JOB_LABELS_M, RESOURCE_LABELS, WAR_CAUSE_LABELS, type Government, type Memory, type SimEvent, type WarCause } from './types';
 
 export const TRADITION_NAMES: Record<string, string> = {
   jousts: 'les joutes', harvestFeast: 'le banquet des moissons', greatFair: 'la grande foire', storytelling: 'les veillées des conteurs',
@@ -17,7 +17,7 @@ export function eventText(e: SimEvent, place: (id: number) => string): string {
   switch (e.type) {
     case 'founded': return `Fondation de ${place(e.settlement)}`;
     case 'birth': return `Naissance de ${n[0]}, enfant de ${n[1]}`;
-    case 'death': return `Mort de ${n[0]} à ${e.value} ans (${e.what === 'age' ? 'vieillesse' : e.what === 'thirst' ? 'soif' : 'faim'})`;
+    case 'death': return `Mort de ${n[0]} à ${e.value} ans (${e.what === 'age' ? 'vieillesse' : e.what === 'thirst' ? 'soif' : e.what === 'battle' ? 'au combat' : 'faim'})`;
     case 'marriage': return `Union de ${n[0]} et ${n[1]}`;
     case 'project': return `Chantier ouvert : ${(BUILDING_NAMES[String(e.what)] ?? '').toLowerCase()}`;
     case 'built': return `${BUILDING_NAMES[String(e.what)] ?? 'Bâtiment'} achevé${n[0] ? ` (dernière pierre posée par ${n[0]})` : ''}`;
@@ -34,6 +34,13 @@ export function eventText(e: SimEvent, place: (id: number) => string): string {
     case 'schism': return `Schisme : ${n[0]} rompt avec ${n[1]} et fonde ${e.what}`;
     case 'faithEnd': return `Plus personne ne suit ${e.what}`;
     case 'colony': return `${e.value} colons partis de ${place(e.b ?? 0)} s’installent à ${place(e.settlement)}${n.length ? ` (${n.join(', ')}…)` : ''}`;
+    case 'war': return e.what === 'alliance' ? `${n[0]} entre en guerre contre ${n[1]} pour honorer son alliance` : `${n[0]} déclare la guerre à ${n[1]} — cause : ${WAR_CAUSE_LABELS[e.what as WarCause] ?? e.what}`;
+    case 'peace': return `Paix entre ${n[0]} et ${n[1]} après ${e.value} morts${e.what === 'attacker' ? ` : ${n[0]} l’emporte` : e.what === 'defender' ? ` : ${n[1]} l’emporte` : ', sans vainqueur'}`;
+    case 'alliance': return e.what === 'broken' ? `L’alliance de ${n[0]} et ${n[1]} est rompue` : `${n[0]} et ${n[1]} scellent une alliance`;
+    case 'siege': return `L’armée de ${n[0]} met le siège devant ${place(e.settlement)}`;
+    case 'battle': return `Bataille de ${place(e.settlement)} : ${e.what === 'attackers' ? `victoire de ${n[0]}` : `${n[1]} repousse ${n[0]}`} (${e.value} morts)`;
+    case 'conquest': return `${place(e.settlement)} tombe aux mains de ${n[0]}`;
+    case 'secession': return e.what === 'return' ? `${place(e.settlement)} se soulève contre ${n[1]} et rejoint ${n[0]}` : `${place(e.settlement)} rompt avec ${n[1]} et fonde son propre peuple`;
     case 'festival': return `Grande fête : ${TRADITION_NAMES[String(e.what)] ?? 'réjouissances'}`;
     default: return '';
   }
@@ -71,6 +78,9 @@ export function memoryText(m: Memory, names: Record<number, string>, female: boo
     case 'faith': return `Embrasse ${m.what}`;
     case 'prophet': return `Fonde ${m.what}`;
     case 'colonist': return `Part fonder ${m.place}`;
+    case 'battle': return `Combat à la bataille de ${m.place}`;
+    case 'wounded': return `Blessé${e} au combat`;
+    case 'conquered': return `Voit sa terre passer sous la loi de ${m.place}`;
     case 'discoveryTech': return `Ses travaux aboutissent : ${TECH_BY_ID.get(String(m.what))?.name ?? m.what}`;
     default: return '';
   }

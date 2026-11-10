@@ -18,12 +18,13 @@ export enum Activity {
   Trading = 12,
   Praying = 13,
   Migrating = 14,
+  Fighting = 15,
 }
-export const ACTIVITY_COUNT = 15;
+export const ACTIVITY_COUNT = 16;
 
 export const ACTIVITY_LABELS: Record<number, string> = {
   0: 'Flâne', 1: 'Cueille et chasse', 2: 'Mange', 3: 'Boit', 4: 'Dort', 5: 'Discute', 6: 'Explore', 7: 'Se repose au foyer', 8: 'Joue',
-  9: 'Travaille', 10: 'S’approvisionne', 11: 'Bâtit', 12: 'En voyage de commerce', 13: 'Prie au temple', 14: 'Part fonder une colonie',
+  9: 'Travaille', 10: 'S’approvisionne', 11: 'Bâtit', 12: 'En voyage de commerce', 13: 'Prie au temple', 14: 'Part fonder une colonie', 15: 'En campagne militaire',
 };
 
 /** Phases of an action. */
@@ -53,24 +54,24 @@ export const RESOURCE_COUNT = 8;
 /** Reference prices in coins per unit. */
 export const BASE_PRICE = [1, 0.8, 1.2, 3, 2, 12, 8, 5];
 
-export const JOBS = ['gatherer', 'farmer', 'herder', 'fisher', 'woodcutter', 'miner', 'builder', 'smith', 'artisan', 'merchant', 'researcher', 'leader'] as const;
-export const JOB_LABELS_M = ['Cueilleur', 'Agriculteur', 'Éleveur', 'Pêcheur', 'Bûcheron', 'Mineur', 'Bâtisseur', 'Forgeron', 'Artisan', 'Marchand', 'Savant', 'Dirigeant'];
-export const JOB_LABELS_F = ['Cueilleuse', 'Agricultrice', 'Éleveuse', 'Pêcheuse', 'Bûcheronne', 'Mineuse', 'Bâtisseuse', 'Forgeronne', 'Artisane', 'Marchande', 'Savante', 'Dirigeante'];
-export const enum J { Gatherer, Farmer, Herder, Fisher, Woodcutter, Miner, Builder, Smith, Artisan, Merchant, Researcher, Leader }
-export const JOB_COUNT = 12;
+export const JOBS = ['gatherer', 'farmer', 'herder', 'fisher', 'woodcutter', 'miner', 'builder', 'smith', 'artisan', 'merchant', 'researcher', 'leader', 'soldier'] as const;
+export const JOB_LABELS_M = ['Cueilleur', 'Agriculteur', 'Éleveur', 'Pêcheur', 'Bûcheron', 'Mineur', 'Bâtisseur', 'Forgeron', 'Artisan', 'Marchand', 'Savant', 'Dirigeant', 'Soldat'];
+export const JOB_LABELS_F = ['Cueilleuse', 'Agricultrice', 'Éleveuse', 'Pêcheuse', 'Bûcheronne', 'Mineuse', 'Bâtisseuse', 'Forgeronne', 'Artisane', 'Marchande', 'Savante', 'Dirigeante', 'Soldate'];
+export const enum J { Gatherer, Farmer, Herder, Fisher, Woodcutter, Miner, Builder, Smith, Artisan, Merchant, Researcher, Leader, Soldier }
+export const JOB_COUNT = 13;
 
 /** Skills: one per profession, then eloquence and exploration. */
-export const SKILL_SOCIAL = 12;
-export const SKILL_EXPLORE = 13;
-export const SKILL_COUNT = 14;
+export const SKILL_SOCIAL = 13;
+export const SKILL_EXPLORE = 14;
+export const SKILL_COUNT = 15;
 export const SKILL_LABELS = [
-  'Cueillette et chasse', 'Agriculture', 'Élevage', 'Pêche', 'Bûcheronnage', 'Extraction', 'Construction', 'Forge', 'Artisanat', 'Négoce', 'Savoir', 'Gouvernement',
+  'Cueillette et chasse', 'Agriculture', 'Élevage', 'Pêche', 'Bûcheronnage', 'Extraction', 'Construction', 'Forge', 'Artisanat', 'Négoce', 'Savoir', 'Gouvernement', 'Armes',
   'Éloquence', 'Exploration',
 ];
 
 export type MemoryType =
   | 'born' | 'settled' | 'married' | 'child' | 'friend' | 'quarrel' | 'discovery' | 'hunger' | 'gift' | 'received' | 'mourning' | 'feast'
-  | 'job' | 'built' | 'journey' | 'home' | 'ruler' | 'deposed' | 'faith' | 'prophet' | 'colonist' | 'discoveryTech';
+  | 'job' | 'built' | 'journey' | 'home' | 'ruler' | 'deposed' | 'faith' | 'prophet' | 'colonist' | 'discoveryTech' | 'battle' | 'wounded' | 'conquered';
 
 export interface Memory {
   /** Simulated time of the event. */
@@ -137,8 +138,10 @@ export interface Person {
   /** Goods being carried: quantity and resource index. */
   carry: number;
   carryRes: number;
-  /** Trade journey in progress (merchants). */
+  /** Journey in progress (trade, migration, military campaign). */
   trip: Trip | null;
+  /** Army the person is serving in (0 = none). */
+  army: number;
   /** True while inside a building (not drawn). */
   inside: boolean;
   /** Lifetime counters (observable behaviour, used by statistics and tests). */
@@ -148,8 +151,8 @@ export interface Person {
 export interface Trip {
   /** Destination settlement. */
   to: number;
-  /** 1 = outbound, 2 = returning, 3 = one-way migration to found or join a colony. */
-  stage: 1 | 2 | 3;
+  /** 1 = outbound, 2 = returning, 3 = one-way migration, 4 = army marching out, 5 = army marching home. */
+  stage: 1 | 2 | 3 | 4 | 5;
   depart: number;
   arrive: number;
   /** Local coordinates of both ends in the home settlement's frame. */
@@ -170,7 +173,7 @@ export interface DeadPerson {
   birth: number;
   birthPlace: string;
   death: number;
-  cause: 'starvation' | 'thirst' | 'age';
+  cause: 'starvation' | 'thirst' | 'age' | 'battle';
   settlement: number;
   spouse: number;
   parents: [number, number];
@@ -230,11 +233,16 @@ export interface SettlementState {
   civ: number;
   /** Simulated time of its (re)foundation by its current people. */
   founded: number;
+  /** Civilisation that founded it (differs from `civ` when occupied). */
+  origin: number;
+  /** End of an ongoing siege (0 = none): the besieged cannot forage far or trade. */
+  besiegedUntil: number;
 }
 
 export type SimEventType =
   | 'founded' | 'birth' | 'death' | 'marriage' | 'project' | 'built' | 'famine' | 'harvest' | 'trade' | 'shortage'
-  | 'civ' | 'ruler' | 'coup' | 'government' | 'tech' | 'religion' | 'schism' | 'faithEnd' | 'colony' | 'festival';
+  | 'civ' | 'ruler' | 'coup' | 'government' | 'tech' | 'religion' | 'schism' | 'faithEnd' | 'colony' | 'festival'
+  | 'war' | 'peace' | 'alliance' | 'battle' | 'siege' | 'conquest' | 'secession';
 
 /** A dated fact recorded by the simulation (seed of the future chronicles). */
 export interface SimEvent {
@@ -268,12 +276,15 @@ export interface SimState {
   events: SimEvent[];
   civs: Civilization[];
   religions: Religion[];
+  relations: Relation[];
+  wars: War[];
+  armies: Army[];
   nextBuildingId: number;
   /** Ticks merged per step: 1 = finest; raised at very high speeds (coarser, aggregated simulation). */
   stride: number;
 }
 
-export const SIM_STATE_VERSION = 3;
+export const SIM_STATE_VERSION = 4;
 
 // ------------------------------------------------------- civilisations
 export type Government = 'chiefdom' | 'monarchy' | 'council';
@@ -336,6 +347,66 @@ export interface Civilization {
   lastColony: number;
   /** True once every settlement is gone: kept for history. */
   fallen: number;
+}
+
+// ----------------------------------------------------- diplomacy & war
+export type WarCause = 'resources' | 'territory' | 'rivalry' | 'religion' | 'security';
+export const WAR_CAUSE_LABELS: Record<WarCause, string> = {
+  resources: 'la convoitise des ressources', territory: 'des terres disputées', rivalry: 'la rivalité des dirigeants',
+  religion: 'la querelle des croyances', security: 'la crainte d’un voisin trop fort',
+};
+
+/** Standing between two civilisations (a < b). */
+export interface Relation {
+  a: number;
+  b: number;
+  /** -1 (hatred) .. 1 (friendship). */
+  opinion: number;
+  status: 'peace' | 'war' | 'alliance';
+  since: number;
+  /** No new war before this time (treaty). */
+  truceUntil: number;
+  /** Resentment left by past wars, fading with the years. */
+  grievance: number;
+  /** What currently weighs most against the relation. */
+  tension: WarCause;
+}
+
+export interface War {
+  id: number;
+  attacker: number;
+  defender: number;
+  cause: WarCause;
+  start: number;
+  /** 0 while the war goes on. */
+  end: number;
+  deathsAttacker: number;
+  deathsDefender: number;
+  battles: number;
+  /** Settlements taken by each side during the war. */
+  takenByAttacker: number[];
+  takenByDefender: number[];
+  /** 'attacker' | 'defender' | 'draw' once ended. */
+  outcome: string;
+}
+
+export interface Army {
+  id: number;
+  civ: number;
+  war: number;
+  /** Settlement it set out from and the one it marches on. */
+  home: number;
+  target: number;
+  members: number[];
+  /** Size when it set out. */
+  initial: number;
+  state: 'march' | 'siege' | 'battle' | 'return';
+  /** Defenders drawn into the battle (target side). */
+  defenders: number[];
+  defendersInitial: number;
+  /** Time the current state began / the next battle round happens. */
+  since: number;
+  nextRound: number;
 }
 
 export interface Religion {
@@ -442,6 +513,7 @@ export interface PopulationSummary {
   byJob: number[];
   births: number;
   civilizations: number;
+  wars: number;
 }
 
 /** Static identity of a person for lists and rendering. */
@@ -476,11 +548,17 @@ export interface SettlementView {
   buildings: number;
   housing: number;
   civ: number;
+  origin: number;
+  besieged: boolean;
 }
 
 /** Political and cultural picture of the world for the interface. */
 export interface WorldView {
-  civs: (Civilization & { population: number; settlements: number[]; leaderName: string; followers: Record<number, number> })[];
+  civs: (Civilization & { population: number; settlements: number[]; leaderName: string; followers: Record<number, number>; soldiers: number })[];
+  relations: Relation[];
+  wars: War[];
+  /** Armies in the field, with their position in their home settlement's frame. */
+  armies: { id: number; civ: number; home: number; target: number; state: string; size: number; e: number; n: number }[];
   religions: (Religion & { followers: number })[];
   /** Settlement id -> [civ, population]. */
   settlements: Record<number, [number, number]>;

@@ -1,7 +1,7 @@
 import { Rng } from '../core/rng';
 import { SECONDS_PER_YEAR } from './clock';
 import { dwellingCapacity } from './sites';
-import { Activity, Phase, SKILL_COUNT, type Household, type Person, type SimBuilding, type SimSite } from './types';
+import { Activity, Phase, SKILL_COUNT, SKILL_EXPLORE, SKILL_SOCIAL, type Household, type Person, type SimBuilding, type SimSite } from './types';
 
 const FEMALE = ['Aëla', 'Brune', 'Cyanne', 'Dalia', 'Elwen', 'Fara', 'Gaïa', 'Hélia', 'Isaure', 'Jana', 'Kaëlle', 'Lyra', 'Maëve', 'Nérie', 'Oriane', 'Perle', 'Rhéa', 'Sélène', 'Talia', 'Una', 'Vesna', 'Ysolde', 'Zélie', 'Amara', 'Bérénice', 'Clio', 'Doria', 'Enora', 'Flore', 'Ilse', 'Liv', 'Mira', 'Nour', 'Ondine', 'Sibylle', 'Thaïs'];
 const MALE = ['Alaric', 'Bran', 'Cael', 'Doran', 'Edric', 'Faël', 'Gauvain', 'Hadrien', 'Ivar', 'Joris', 'Kael', 'Lothar', 'Maël', 'Nils', 'Oren', 'Perrin', 'Ronan', 'Soren', 'Tarek', 'Ulric', 'Vadim', 'Wulf', 'Yann', 'Zeno', 'Aubin', 'Brieuc', 'Corwin', 'Darius', 'Emrys', 'Galen', 'Idris', 'Léandre', 'Milo', 'Octave', 'Silas', 'Théo'];
@@ -28,7 +28,7 @@ export function blankPerson(rng: Rng, id: number, sex: 0 | 1, birth: number, las
     household, settlement, spouse: 0, parents: [0, 0], children: [], bonds: {},
     memories: [{ t: birth, type: 'born', place }],
     e: 0, n: 0, activity: Activity.Idle, phase: Phase.Do, te: 0, tn: 0, path: [], until: time, partner: 0,
-    carry: 0, carryRes: 0, trip: null, inside: false,
+    carry: 0, carryRes: 0, trip: null, army: 0, inside: false,
     counts: { meals: 0, forages: 0, chats: 0, explorations: 0, gifts: 0, shifts: 0 },
   };
 }
@@ -65,8 +65,8 @@ export function createPopulation(seedRng: Rng, sites: SimSite[], buildings: SimB
     const p = blankPerson(rng, nextId++, sex, birth, lastName, site.name, site.id, hh.id, time);
     p.look.skin = Math.max(0, Math.min(SKIN_TONES - 1, baseSkin + rng.int(-1, 1)));
     if (age >= 12) p.skills[0] = 0.1 + rng.next() * 0.25;
-    p.skills[10] = rng.next() * 0.2;
-    p.skills[11] = rng.next() * 0.15;
+    p.skills[SKILL_SOCIAL] = rng.next() * 0.2;
+    p.skills[SKILL_EXPLORE] = rng.next() * 0.15;
     p.e = home.e + rng.range(-1.5, 1.5);
     p.n = home.n + rng.range(-1.5, 1.5);
     persons.push(p);

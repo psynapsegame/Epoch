@@ -10,6 +10,7 @@ import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour } from '../s
 import { Activity, BASE_PRICE, J, N, R, T, type FoundingBuilding, type SimSite } from '../src/sim/types';
 import { addResearch, citizens, civilizationsDaily, enthrone } from '../src/sim/civilization';
 import { BASE_MODS, TECHS, availableTechs, modsFor } from '../src/sim/tech';
+import { armiesStep, contactBetween, declareWar, diplomacyDaily, relationOf, soldierSlots, strength } from '../src/sim/war';
 
 const TICKS_PER_DAY = SECONDS_PER_DAY / TICK_SECONDS;
 let sites: SimSite[] = [];
@@ -560,4 +561,94 @@ describe('civilisations', () => {
     expect(sim.state.events.some((e) => e.type === 'religion')).toBe(true);
     expect(sim.search(r.founderName.split(' ')[0]).some((x) => x.id === r.founder)).toBe(true);
   }, 120000);
+});
+
+describe('war and diplomacy', () => {
+  // The test world's peoples live far apart: here the first two hamlets are made neighbours (900 m by land).
+  const neighbours = (): SimSite[] => sites.map((s) => (s.id === 1 ? { ...s, neighbors: [...s.neighbors.filter((n) => n.id !== 2), { id: 2, e: 900, n: 0, distance: 900, overSea: false }] }
+    : s.id === 2 ? { ...s, neighbors: [...s.neighbors.filter((n) => n.id !== 1), { id: 1, e: -900, n: 0, distance: 900, overSea: false }] } : s));
+  const fresh = (seed = 'alpha') => Simulation.create(seed, neighbours(), founding, 100, START);
+  const rivals = (sim: Simulation) => {
+    const [a, b] = sim.state.civs;
+    const link = contactBetween(sim, a, b);
+    expect(link).not.toBeNull();
+    return { a, b, link: link! };
+  };
+
+  it('keeps a small watch in peace and raises a levy in war', () => {
+    const sim = fresh();
+    const pair = rivals(sim);
+    const st = sim.settlement(pair.a.capital)!;
+    const adults = sim.census(st.id).adults;
+    const peace = soldierSlots(sim, st, adults);
+    declareWar(sim, relationOf(sim, pair.a.id, pair.b.id), pair.a, pair.b);
+    expect(soldierSlots(sim, st, adults)).toBeGreaterThan(peace + 2);
+    expect(sim.summary().wars).toBe(1);
+    expect(sim.state.events.some((e) => e.type === 'war')).toBe(true);
+    expect(strength(sim, pair.a)).toBeGreaterThan(0);
+    sim.run(TICKS_PER_DAY * 2);
+    expect(sim.state.persons.filter((p) => p.settlement === st.id && p.job === J.Soldier).length).toBeGreaterThan(3);
+  });
+
+  it('fights a real campaign: march, battle, dead, conquest or retreat, then peace', () => {
+    const sim = fresh();
+    const pair = rivals(sim);
+    const war0 = sim.state.wars.length;
+    const r = relationOf(sim, pair.a.id, pair.b.id);
+    declareWar(sim, r, pair.a, pair.b);
+    const war = sim.state.wars[war0];
+    sim.setStride(6);
+    let marched = false, fought = false;
+    const popBefore = sim.state.persons.length;
+    for (let day = 0; day < 360 * 6 && !war.end; day++) {
+      sim.run(TICKS_PER_DAY / 6);
+      if (sim.state.armies.length) {
+        marched = true;
+        for (const army of sim.state.armies) {
+          for (const id of army.members) {
+            const p = sim.person(id)!;
+            expect(p.army).toBe(army.id);
+            expect(p.job).toBe(J.Soldier);
+          }
+        }
+      }
+      if (sim.state.events.some((e) => e.type === 'battle')) fought = true;
+    }
+    expect(marched).toBe(true);
+    expect(fought).toBe(true);
+    expect(war.battles).toBeGreaterThan(0);
+    const fallen = sim.state.dead.filter((d) => d.cause === 'battle');
+    expect(fallen.length).toBe(war.deathsAttacker + war.deathsDefender);
+    expect(fallen.length).toBeGreaterThan(0);
+    expect(sim.state.persons.length).toBeLessThan(popBefore + 400);
+    // the dead are mourned and remembered
+    expect(sim.state.persons.some((p) => p.memories.some((m) => m.type === 'battle' || m.type === 'mourning'))).toBe(true);
+    expect(war.end).toBeGreaterThan(war.start);
+    expect(['attacker', 'defender', 'draw']).toContain(war.outcome);
+    expect(r.status).toBe('peace');
+    expect(r.truceUntil).toBeGreaterThan(sim.state.time);
+    expect(sim.state.events.some((e) => e.type === 'peace')).toBe(true);
+    // nobody is left under arms once the war is over and the armies are home
+    sim.run(TICKS_PER_DAY * 5);
+    armiesStep(sim);
+    if (!sim.state.armies.length) for (const p of sim.state.persons) expect(p.army).toBe(0);
+    // a conquered settlement really changed hands
+    for (const id of war.takenByAttacker) expect(sim.state.events.some((e) => e.type === 'conquest' && e.settlement === id)).toBe(true);
+  }, 240000);
+
+  it('lets relations drift with what happens between peoples', () => {
+    const sim = fresh();
+    const pair = rivals(sim);
+    for (let d = 0; d < 400; d++) diplomacyDaily(sim);
+    const r = relationOf(sim, pair.a.id, pair.b.id);
+    expect(r.opinion).toBeGreaterThan(-1);
+    expect(r.opinion).toBeLessThan(1);
+    expect(['resources', 'territory', 'rivalry', 'religion', 'security']).toContain(r.tension);
+    // old wounds weigh on the relation, then heal
+    const before = r.opinion;
+    r.grievance = 0.6;
+    for (let d = 0; d < 300; d++) diplomacyDaily(sim);
+    if (r.status === 'peace') expect(r.opinion).toBeLessThan(before + 0.05);
+    expect(r.grievance).toBeLessThan(0.6);
+  });
 });

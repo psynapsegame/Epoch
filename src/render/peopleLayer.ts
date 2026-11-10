@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { SECONDS_PER_YEAR } from '../sim/clock';
 import { siteFrame } from '../sim/sites';
 import type { Settlement } from '../sim/settlements';
-import { Activity, type RosterEntry, type Snapshot } from '../sim/types';
+import { Activity, J, type RosterEntry, type Snapshot } from '../sim/types';
 import type { World } from '../world/world';
 import { patchMaterial } from './shared';
 
@@ -32,6 +32,10 @@ function personGeometry(): THREE.BufferGeometry {
     tagged(new THREE.BoxGeometry(0.11, 0.58, 0.13).translate(0.3, 1.1, 0), 4, 1),
     tagged(new THREE.IcosahedronGeometry(0.165, 1).translate(0, 1.6, 0), 1, 0),
     tagged(new THREE.SphereGeometry(0.185, 7, 4, 0, Math.PI * 2, 0, Math.PI * 0.55).translate(0, 1.615, -0.02), 2, 0),
+    // spear and round shield, shown only on people under arms (part 5)
+    tagged(new THREE.BoxGeometry(0.045, 2.2, 0.045).translate(0.4, 1.25, 0.1), 5, 0),
+    tagged(new THREE.ConeGeometry(0.07, 0.28, 4).translate(0.4, 2.48, 0.1), 5, 0),
+    tagged(new THREE.CylinderGeometry(0.3, 0.3, 0.05, 8).rotateX(Math.PI / 2).translate(-0.34, 1.12, 0.14), 5, 0),
   ];
   return mergeGeometries(parts)!;
 }
@@ -58,6 +62,7 @@ export class PeopleLayer {
   private hair: THREE.InstancedBufferAttribute;
   private tunic: THREE.InstancedBufferAttribute;
   private anim: THREE.InstancedBufferAttribute;
+  private gear: THREE.InstancedBufferAttribute;
   private shown = new Map<number, Shown>();
   private frames = new Map<number, ReturnType<typeof siteFrame>>();
   private ring: THREE.Mesh;
@@ -77,16 +82,19 @@ export class PeopleLayer {
     this.hair = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
     this.tunic = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
     this.anim = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
-    for (const a of [this.skin, this.hair, this.tunic, this.anim]) a.setUsage(THREE.DynamicDrawUsage);
+    this.gear = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+    for (const a of [this.skin, this.hair, this.tunic, this.anim, this.gear]) a.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('aSkin', this.skin);
     geo.setAttribute('aHair', this.hair);
     geo.setAttribute('aTunic', this.tunic);
     geo.setAttribute('aAnim', this.anim);
+    geo.setAttribute('aGear', this.gear);
     this.material = patchMaterial(new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0 }), {
       vertexPars: /* glsl */ `
         attribute float aPart; attribute float aSide;
         attribute vec3 aSkin; attribute vec3 aHair; attribute vec3 aTunic;
         attribute vec4 aAnim; // x: walking 0..1, y: phase offset, z: bend 0..1, w: skirt 0..1
+        attribute float aGear; // 1 = armed
         varying vec3 vPersonCol;
         vec3 rotX(vec3 p, float a, float pivotY) {
           float c = cos(a), s = sin(a);
@@ -100,7 +108,10 @@ export class PeopleLayer {
           float ph = uTime * 9.0 + aAnim.y;
           float swing = sin(ph) * 0.75 * aAnim.x;
           float work = aAnim.z * (0.75 + 0.2 * sin(uTime * 2.4 + aAnim.y));
-          if (aPart > 2.5 && aPart < 3.5) {
+          if (aPart > 4.5) {
+            // weapons collapse to nothing on civilians
+            transformed = mix(vec3(0.0, 1.0, 0.0), transformed, aGear);
+          } else if (aPart > 2.5 && aPart < 3.5) {
             transformed = rotX(transformed, swing * aSide, 0.82);
           } else {
             // skirt-like flare of the tunic
@@ -109,7 +120,7 @@ export class PeopleLayer {
             transformed = rotX(transformed, work * 0.85, 0.82);
           }
           transformed.y += abs(sin(ph)) * 0.035 * aAnim.x;
-          vPersonCol = aPart < 0.5 ? aTunic : aPart < 1.5 ? aSkin : aPart < 2.5 ? aHair : aPart < 3.5 ? aTunic * 0.35 + vec3(0.03, 0.025, 0.02) : mix(aTunic, aSkin, 0.25);
+          vPersonCol = aPart < 0.5 ? aTunic : aPart < 1.5 ? aSkin : aPart < 2.5 ? aHair : aPart < 3.5 ? aTunic * 0.35 + vec3(0.03, 0.025, 0.02) : aPart < 4.5 ? mix(aTunic, aSkin, 0.25) : mix(vec3(0.22, 0.17, 0.12), aTunic, 0.45);
         }`,
       fragPars: `varying vec3 vPersonCol;`,
       fragColor: `diffuseColor.rgb = vPersonCol;`,
@@ -176,7 +187,7 @@ export class PeopleLayer {
       }
       const de = te - s.e, dn = tn - s.n;
       const d2 = de * de + dn * dn;
-      if (d2 > 900) { s.e = te; s.n = tn; } // teleport-sized jumps (very high speeds) are not animated
+      if (d2 > 900 && simRate > 1000) { s.e = te; s.n = tn; } // teleport-sized jumps (very high speeds) are not animated
       else { s.e += de * k; s.n += dn * k; }
       const moving = d2 > 0.02;
       if (moving) {
@@ -219,7 +230,9 @@ export class PeopleLayer {
       col.setHex(TUNIC[r.look.tunic] ?? TUNIC[0]);
       this.tunic.setXYZ(w, col.r, col.g, col.b);
       const act = flags & 15;
-      const working = !moving && (flags & 64) === 0 && act === Activity.Foraging ? 1 : 0;
+      const fighting = act === Activity.Fighting && !moving;
+      const working = fighting ? 0.55 : !moving && (flags & 64) === 0 && act === Activity.Foraging ? 1 : 0;
+      this.gear.setX(w, r.job === J.Soldier || act === Activity.Fighting ? 1 : 0);
       this.anim.setXYZW(w, moving ? 1 : 0, s.phase, working, r.sex === 0 ? 1 : 0);
       this.drawnIds.push(id);
       (this.drawnPos[w] ??= new THREE.Vector3()).copy(P);
@@ -230,7 +243,7 @@ export class PeopleLayer {
     this.mesh.count = w;
     this.drawn = w;
     this.mesh.instanceMatrix.needsUpdate = true;
-    this.skin.needsUpdate = this.hair.needsUpdate = this.tunic.needsUpdate = this.anim.needsUpdate = true;
+    this.skin.needsUpdate = this.hair.needsUpdate = this.tunic.needsUpdate = this.anim.needsUpdate = this.gear.needsUpdate = true;
 
     this.ring.visible = this.selectedKnown;
     if (this.selectedKnown) {

@@ -278,6 +278,10 @@ export class Game {
       if (this.atlasMode === 'population') {
         color = 0xffb347;
         strength = 0.35 + 0.65 * (pop / maxPop);
+      } else if (this.atlasMode === 'wars') {
+        const st = this.sim.economy?.settlements.find((x) => x.id === s.id);
+        const fighting = w.relations.some((r) => r.status === 'war' && (r.a === civ.id || r.b === civ.id));
+        color = st?.besieged ? 0xf1c40f : st && st.origin && st.origin !== civ.id ? 0xe67e22 : fighting ? 0xc0392b : 0x4a6f8a;
       } else if (this.atlasMode === 'religions') {
         let top = 0, n = 0;
         for (const [f, c] of Object.entries(civ.followers)) if (c > n) { n = c; top = Number(f); }
@@ -297,7 +301,7 @@ export class Game {
 
   get summary(): WorldSummary {
     const s = this.sim.snapshot?.summary;
-    return { population: s?.alive ?? 0, civilizations: s?.civilizations ?? 0, settlements: s?.inhabitedSettlements ?? 0, conflicts: 0 };
+    return { population: s?.alive ?? 0, civilizations: s?.civilizations ?? 0, settlements: s?.inhabitedSettlements ?? 0, conflicts: s?.wars ?? 0 };
   }
 
   setSpeed(index: number): void {

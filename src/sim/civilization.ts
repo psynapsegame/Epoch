@@ -61,6 +61,7 @@ export function foundCivilization(sim: Simulation, st: SettlementState): Civiliz
   };
   s.civs.push(civ);
   st.civ = id;
+  if (!st.origin) st.origin = id;
   st.founded = s.time;
   sim.record({ t: s.time, type: 'civ', settlement: st.id, civ: id });
   // a people is recognised by its colours
@@ -403,13 +404,20 @@ function politics(sim: Simulation, civ: Civilization, people: Person[], newYear:
   for (const st of s.settlements) if (st.civ === civ.id) hungry = Math.max(hungry, st.hungryDays);
   const rel = s.religions[civ.religion - 1];
   const house = reigning(civ);
-  const target = clamp01(0.4 + (food / people.length - 0.6) * 0.9 + leader.skills[J.Leader] * 0.2 + leader.skills[SKILL_SOCIAL] * 0.1
+  // a people at war tires of it; a restless temperament is harder to rule
+  const unrest = people.reduce((a, p) => a + p.traits[T.Aggression] + p.traits[T.Ambition], 0) / people.length / 2;
+  const reign = house?.rulers[house.rulers.length - 1];
+  const years = reign ? (t - reign.from) / SECONDS_PER_YEAR : 0;
+  const target = clamp01(0.42 + (food / people.length - 0.65) * 0.9 + leader.skills[J.Leader] * 0.1 + leader.skills[SKILL_SOCIAL] * 0.05
+    - Math.min(0.25, Math.max(0, years - 6) * 0.012) // long reigns wear thin
+    - (unrest - 0.5) * 0.6 - (sim.atWar(civ.id) ? 0.12 : 0) - Math.max(0, people.length - 60) * 0.0015
     + (rel && leader.faith === rel.id ? rel.fervor * 0.12 : 0) + Math.min(0.12, (house?.rulers.length ?? 1) * 0.03) - Math.min(0.5, hungry * 0.06));
   civ.legitimacy += (target - civ.legitimacy) * 0.03;
 
+  // every year brings its quarrels and scandals, worse under a harsh ruler
+  if (newYear) civ.legitimacy = Math.max(0, civ.legitimacy - sim.rng.next() * 0.28 * (0.4 + leader.traits[T.Aggression]));
   // a council re-elects its first sage every eight years
   if (civ.government === 'council' && newYear) {
-    const reign = house?.rulers[house.rulers.length - 1];
     if (reign && t - reign.from >= 8 * SECONDS_PER_YEAR) chooseLeader(sim, civ, 'election');
   }
   // a despised ruler invites usurpers; a starving people rises
@@ -485,7 +493,7 @@ export function civilizationsDaily(sim: Simulation): void {
       continue;
     }
     // the capital follows the people
-    if (sim.census(civ.capital).pop === 0) {
+    if (sim.census(civ.capital).pop === 0 || sim.settlement(civ.capital)?.civ !== civ.id) {
       let best = civ.capital, n = 0;
       for (const st of s.settlements) if (st.civ === civ.id && sim.census(st.id).pop > n) { n = sim.census(st.id).pop; best = st.id; }
       civ.capital = best;
