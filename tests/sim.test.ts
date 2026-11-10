@@ -8,6 +8,8 @@ import { findPath, isWalkable, lineOfSight } from '../src/sim/pathfinding';
 import { BUILD_COST, assignJobs, jobSlots, planConstruction, updatePrices, workOnProject } from '../src/sim/economy';
 import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour } from '../src/sim/clock';
 import { Activity, BASE_PRICE, J, N, R, T, type FoundingBuilding, type SimSite } from '../src/sim/types';
+import { addResearch, citizens, civilizationsDaily, enthrone } from '../src/sim/civilization';
+import { BASE_MODS, TECHS, availableTechs, modsFor } from '../src/sim/tech';
 
 const TICKS_PER_DAY = SECONDS_PER_DAY / TICK_SECONDS;
 let sites: SimSite[] = [];
@@ -419,4 +421,143 @@ describe('generations', () => {
     expect(c.checksum()).toBe(b.checksum());
     expect(b.checksum()).toBe(a.checksum());
   });
+});
+
+describe('civilisations', () => {
+  it('found a people around each inhabited settlement, led by one of its own', () => {
+    const sim = fresh();
+    expect(sim.state.civs.length).toBe(3);
+    for (const civ of sim.state.civs) {
+      const leader = sim.person(civ.leader)!;
+      expect(leader).toBeDefined();
+      expect(citizens(sim, civ)).toContain(leader);
+      expect(leader.job).toBe(J.Leader);
+      expect(civ.dynasties.length).toBe(1);
+      expect(civ.dynasties[0].rulers[0]).toMatchObject({ person: leader.id, how: 'founding', to: 0 });
+      expect(civ.culture.values.length).toBe(4);
+      expect(civ.culture.people.length).toBeGreaterThan(4);
+      expect(leader.memories.some((m) => m.type === 'ruler')).toBe(true);
+    }
+    expect(sim.summary().civilizations).toBe(3);
+    // no founder is left alone in a village
+    for (const st of sim.state.settlements) expect([0, ...Array.from({ length: 60 }, (_, i) => i + 8)]).toContain(sim.census(st.id).pop);
+  });
+
+  it('replaces a dead ruler at once and records the succession', () => {
+    const sim = fresh();
+    const civ = sim.state.civs[0];
+    const old = sim.person(civ.leader)!;
+    sim.kill(old, 'age');
+    expect(civ.leader).not.toBe(old.id);
+    const next = sim.person(civ.leader)!;
+    expect(next.job).toBe(J.Leader);
+    const reigns = civ.dynasties.flatMap((d) => d.rulers);
+    expect(reigns.length).toBe(2);
+    expect(reigns[0].to).toBe(sim.state.time);
+    expect(sim.state.events.some((e) => e.type === 'ruler' && e.a === next.id)).toBe(true);
+    // the dead ruler stays in the archives
+    expect(sim.view(old.id)!.alive).toBe(false);
+  });
+
+  it('keeps power in the family under a monarchy', () => {
+    const sim = fresh();
+    const civ = sim.state.civs[0];
+    civ.government = 'monarchy';
+    const parent = citizens(sim, civ).find((p) => p.children.some((c) => { const k = sim.person(c); return k && (sim.state.time - k.birth) / SECONDS_PER_YEAR < 16; }))!;
+    enthrone(sim, civ, parent, 'election');
+    const heir = sim.person(parent.children[0])!;
+    heir.birth = sim.state.time - 20 * SECONDS_PER_YEAR; // of age
+    const houses = civ.dynasties.length;
+    sim.kill(parent, 'age');
+    expect(civ.leader).toBe(heir.id);
+    expect(civ.dynasties.length).toBe(houses);
+    const house = civ.dynasties[civ.dynasties.length - 1];
+    expect(house.rulers[house.rulers.length - 1]).toMatchObject({ person: heir.id, how: 'inheritance' });
+    // without an heir, a people that can write entrusts power to a council
+    civ.techs.push('writing');
+    for (const c of heir.children) sim.person(c)!.birth = sim.state.time;
+    sim.kill(heir, 'age');
+    expect(['council', 'monarchy']).toContain(civ.government);
+    if (!heir.children.length) expect(civ.government).toBe('council');
+  });
+
+  it('lets a despised ruler be overthrown', () => {
+    const sim = fresh();
+    const civ = sim.state.civs[0];
+    const before = civ.leader;
+    const people = citizens(sim, civ);
+    for (const p of people) p.needs[N.Food] = 0.1; // misery
+    let days = 0;
+    while (civ.leader === before && days < 4000) {
+      civ.legitimacy = 0.1;
+      civilizationsDaily(sim);
+      days++;
+    }
+    expect(civ.leader).not.toBe(before);
+    expect(sim.state.events.some((e) => e.type === 'coup')).toBe(true);
+    expect(sim.person(before)!.memories.some((m) => m.type === 'deposed')).toBe(true);
+    expect(civ.dynasties.length).toBeGreaterThan(1);
+  });
+
+  it('turns research into technologies with real effects', () => {
+    expect(modsFor([])).toEqual(BASE_MODS);
+    expect(modsFor(['pottery', 'irrigation']).farm).toBeCloseTo(1.25, 6);
+    expect(modsFor(['pottery']).spoilage).toBeLessThan(BASE_MODS.spoilage);
+    expect(modsFor(['masonry', 'metallurgy']).tools).toBeGreaterThan(BASE_MODS.tools);
+    expect(availableTechs([]).every((t) => t.requires.length === 0)).toBe(true);
+    expect(availableTechs(['pottery']).some((t) => t.id === 'irrigation')).toBe(true);
+    for (const t of TECHS) for (const r of t.requires) expect(TECHS.some((x) => x.id === r)).toBe(true);
+
+    const sim = fresh();
+    const civ = sim.state.civs[0];
+    civ.research.tech = 'pottery';
+    const st = sim.settlement(civ.capital)!;
+    const lossBefore = sim.mods(st.id).spoilage;
+    addResearch(sim, civ, 1000);
+    expect(civ.techs).toContain('pottery');
+    expect(sim.mods(st.id).spoilage).toBeLessThan(lossBefore);
+    expect(sim.state.events.some((e) => e.type === 'tech' && e.what === 'pottery')).toBe(true);
+    expect(civ.research.tech).not.toBe('pottery');
+  });
+
+  it('sends families to settle empty land, which joins their people', () => {
+    const sim = fresh();
+    const civ = sim.state.civs[0];
+    const from = sim.settlement(civ.capital)!;
+    const site = sim.site(from.id)!;
+    const nb = site.neighbors.find((n) => sim.census(n.id).pop === 0);
+    if (!nb) return; // this test world has no empty land within reach of the capital
+    const party = sim.state.households.filter((h) => h.settlement === from.id && !h.members.includes(civ.leader)).slice(0, 3);
+    const heads = party.reduce((a, h) => a + h.members.length, 0);
+    const food = from.stock[R.Food];
+    sim.migrate(party, from, nb.id);
+    const to = sim.settlement(nb.id)!;
+    expect(to.civ).toBe(civ.id);
+    expect(to.stock[R.Food]).toBeGreaterThan(0);
+    expect(from.stock[R.Food] + to.stock[R.Food]).toBeCloseTo(food, 6);
+    for (const h of party) for (const id of h.members) expect(sim.person(id)!.trip?.stage).toBe(3);
+    sim.setStride(10);
+    sim.run(Math.round((TICKS_PER_DAY * 20) / 10));
+    expect(sim.census(nb.id).pop).toBe(heads);
+    for (const h of party) for (const id of h.members) {
+      const p = sim.person(id)!;
+      expect(p.trip).toBeNull();
+      expect(p.settlement).toBe(nb.id);
+    }
+    expect(sim.state.events.some((e) => e.type === 'colony' && e.settlement === nb.id)).toBe(true);
+    expect(sim.state.civs.length).toBe(3); // a colony, not a new people
+  });
+
+  it('sees beliefs arise and spread', () => {
+    const sim = fresh();
+    sim.setStride(10);
+    sim.run(Math.round((TICKS_PER_DAY * 360 * 2) / 10));
+    const w = sim.worldView();
+    expect(w.religions.length).toBeGreaterThan(0);
+    expect(w.religions.some((r) => r.followers > 10)).toBe(true);
+    const r = w.religions[0];
+    expect(sim.view(r.founder)).not.toBeNull();
+    expect(sim.state.events.some((e) => e.type === 'religion')).toBe(true);
+    expect(sim.search(r.founderName.split(' ')[0]).some((x) => x.id === r.founder)).toBe(true);
+  }, 120000);
 });

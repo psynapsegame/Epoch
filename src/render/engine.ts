@@ -18,7 +18,7 @@ import { createClouds, createStars } from './sky';
 import { PlanetTerrain } from './terrain';
 import { createTerrainMaterial } from './terrainMaterial';
 import { PROFILES, type QualityProfile } from './quality';
-import { ATLAS_MODES, buildAtlasTexture, buildCloudTexture, buildWorldTextures, type AtlasMode } from './worldTextures';
+import { ATLAS_MODES, buildAtlasTexture, buildCloudTexture, buildPoliticalTexture, buildWorldTextures, type AtlasMode, type PoliticalMark } from './worldTextures';
 
 const AXIAL_TILT = 23.4 * (Math.PI / 180);
 const Y = new THREE.Vector3(0, 1, 0);
@@ -243,6 +243,14 @@ export class Engine {
     this.atlasMode = mode;
     if (mode !== 'none') buildAtlasTexture(this.world.data, mode, this.atlasTex);
     this.overlayGoal = mode === 'none' ? 0 : 1;
+  }
+
+  /** Political maps (borders, population, religions) painted from live simulation data. */
+  setPoliticalOverlay(mode: AtlasMode, marks: PoliticalMark[]): void {
+    if (!this.world || !this.atlasTex) return;
+    this.atlasMode = mode;
+    buildPoliticalTexture(this.world.data, marks, this.atlasTex);
+    this.overlayGoal = 1;
   }
 
   get atlas(): AtlasMode {

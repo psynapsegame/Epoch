@@ -6,7 +6,7 @@ joueur-divinité. Paysage, tactile, hors ligne.
 
 > « Avant les royaumes, avant les guerres, avant les légendes, il n’existait qu’un monde. »
 
-Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 3 — la civilisation.**
+Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 4 — le monde historique.**
 
 ## Lancer
 
@@ -82,7 +82,21 @@ Détails : [docs/SIMULATION.md](docs/SIMULATION.md).
 
 Détails : [docs/ECONOMY.md](docs/ECONOMY.md).
 
-Les sections Civilisations, Politique, Histoire, Chroniques et Divinité sont
+## Ce que contient la phase 4
+
+- **Peuples** avec capitale, terres, couleurs, culture, croyances et savoir.
+- **Dirigeants réels**, successions (élection, héritage), maisons régnantes, coups de force et révoltes,
+  trois régimes (chefferie, monarchie, conseil des sages).
+- **Cultures** transmises aux enfants, grande fête annuelle ; **croyances** qui naissent, se propagent,
+  se divisent et s’éteignent.
+- **17 technologies** qui changent réellement rendements, outils, chantiers, commerce, mortalité.
+- **Colonisation** des terres vides par des familles qui voyagent réellement.
+- **Histoire** : journal de tous les faits, archives de tous les défunts, cartes des frontières, de la
+  population et des religions.
+
+Détails : [docs/CIVILIZATIONS.md](docs/CIVILIZATIONS.md).
+
+Les sections Chroniques et Divinité sont
 verrouillées dans l’interface tant que leurs systèmes n’existent pas : aucune donnée fictive n’est affichée.
 
 Architecture détaillée : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -1,5 +1,5 @@
 import type { ToWorker } from './sim.worker';
-import type { EconomyView, FoundingBuilding, PersonView, RosterEntry, SimBuilding, SimSite, SimState, Snapshot } from './types';
+import type { EconomyView, FoundingBuilding, PersonView, RosterEntry, SearchHit, SimBuilding, SimSite, SimState, Snapshot, WorldView } from './types';
 
 /** Main-thread handle on the simulation worker. */
 export class SimClient {
@@ -16,6 +16,10 @@ export class SimClient {
   lastState: SimState | null = null;
   buildings: SimBuilding[] = [];
   economy: EconomyView | null = null;
+  /** Civilisations, religions and recent history. */
+  world: WorldView | null = null;
+  onWorld: (() => void) | null = null;
+  private searches = new Map<number, (h: SearchHit[]) => void>();
   onRoster: (() => void) | null = null;
   onBuildings: (() => void) | null = null;
   onDetail: ((id: number, view: PersonView | null) => void) | null = null;
@@ -42,6 +46,14 @@ export class SimClient {
         case 'economy':
           this.economy = m.economy as EconomyView;
           break;
+        case 'world':
+          this.world = m.world as WorldView;
+          this.onWorld?.();
+          break;
+        case 'search':
+          this.searches.get(m.request)?.(m.hits);
+          this.searches.delete(m.request);
+          break;
         case 'detail':
           this.onDetail?.(m.id, m.view);
           break;
@@ -63,6 +75,7 @@ export class SimClient {
   init(seed: string, sites: SimSite[], founding: FoundingBuilding[], population: number, time: number, state?: SimState): void {
     this.buildings = [];
     this.economy = null;
+    this.world = null;
     this.snapshot = null;
     this.lastState = null;
     this.roster = [];
@@ -82,6 +95,15 @@ export class SimClient {
   /** Subscribes to live details of one person (0 = none). */
   watch(id: number): void {
     this.send({ type: 'watch', id });
+  }
+
+  /** Looks up people by name among the living and the dead (archives). */
+  search(query: string): Promise<SearchHit[]> {
+    return new Promise((resolve) => {
+      const request = this.nextRequest++;
+      this.searches.set(request, resolve);
+      this.send({ type: 'search', request, query });
+    });
   }
 
   /** Fetches an exact copy of the current state (for manual saves). */

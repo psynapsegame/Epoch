@@ -12,6 +12,8 @@ import { DEFAULT_WORLD_WIDTH } from './world/types';
 import type { World } from './world/world';
 import { SAVE_VERSION, saveStore, type SaveData } from './persistence/saveStore';
 import { deviceInfo, initNativeShell, isNative, requestPersistentStorage } from './platform/platform';
+import { CIV_COLORS_HEX, FAITH_COLORS_HEX } from './render/palette';
+import { POLITICAL_MODES, type AtlasMode, type PoliticalMark } from './render/worldTextures';
 import { PROFILES, QUALITY_TIERS, QualityGovernor, defaultTier, targetFrameRate, type QualityTier } from './render/quality';
 import { loadSettings, storeSettings, type Settings } from './settings';
 
@@ -71,6 +73,7 @@ export class Game {
     this.tier = this.settings.quality === 'auto' ? defaultTier(this.device) : this.settings.quality;
     this.engine.applyQuality(PROFILES[this.tier]);
     this.sim.onBuildings = () => this.onSimBuildings();
+    this.sim.onWorld = () => this.onSimWorld();
 
     let lastRender = performance.now();
     const loop = (now: number) => {
@@ -170,6 +173,8 @@ export class Game {
     this.clock.speedIndex = 1;
     this.foundHamlets();
     this.select(0);
+    this.atlasMode = 'none';
+    this.civKey = '';
 
     const sites = this.settlements.map((s) => buildSimSite(this.world!, s, this.settlements));
     const founding = foundingBuildings(this.world, this.settlements, this.buildings);
@@ -189,12 +194,21 @@ export class Game {
     const rng = new Rng(hashString(this.world.data.seed) ^ 0x5e77);
     this.settlements = [];
     this.buildings = [];
-    const count = Math.min(FOUNDING_HAMLETS, this.world.data.sites.length);
-    for (let i = 0; i < count; i++) {
-      const { settlement, buildings } = layoutHamlet(this.world, i, i + 1, placeName(rng), this.buildings.length + 1);
-      if (buildings.length < 4) continue;
-      this.settlements.push(settlement);
-      this.buildings.push(...buildings);
+    // Every promising site of the world is a place a people may one day settle;
+    // the best ones already hold a founders' hamlet.
+    const sites = this.world.data.sites;
+    for (let i = 0; i < sites.length; i++) {
+      const name = placeName(rng);
+      if (i < FOUNDING_HAMLETS) {
+        const { settlement, buildings } = layoutHamlet(this.world, i, i + 1, name, this.buildings.length + 1);
+        this.settlements.push(settlement);
+        if (buildings.length >= 4) this.buildings.push(...buildings);
+        else settlement.buildings = [];
+      } else {
+        const dir = { x: 0, y: 0, z: 0 };
+        this.world.cellDir(sites[i].x, sites[i].y, dir);
+        this.settlements.push({ id: i + 1, name, dir, radius: 40, siteIndex: i, buildings: [] });
+      }
     }
     this.engine.syncBuildings(this.buildings);
   }
@@ -206,6 +220,9 @@ export class Game {
     const R = this.world.R;
     const list: Building[] = [];
     const a = { x: 0, y: 0, z: 0 }, b = { x: 0, y: 0, z: 0 };
+    const tints = new Map<number, number>();
+    const w = this.sim.world;
+    if (w) for (const c of w.civs) for (const sid of c.settlements) tints.set(sid, CIV_COLORS_HEX[c.color % CIV_COLORS_HEX.length]);
     for (const sb of this.sim.buildings) {
       const f = frames.get(sb.settlement);
       if (!f) continue;
@@ -215,12 +232,61 @@ export class Game {
       const l = Math.hypot(fx, fy, fz) || 1;
       list.push({
         id: sb.id, kind: sb.kind as Building['kind'], settlement: sb.settlement, dir: { ...a }, facing: { x: fx / l, y: fy / l, z: fz / l },
-        radius: sb.radius, progress: sb.progress,
+        radius: sb.radius, progress: sb.progress, tint: tints.get(sb.settlement),
       });
     }
     this.buildings = list;
     this.engine.syncBuildings(list);
     this.onBuildings?.();
+  }
+
+  /** Civilisations changed: refresh banners on roofs and the political maps. */
+  private onSimWorld(): void {
+    const key = this.sim.world?.civs.map((c) => `${c.id}:${c.settlements.join('.')}`).join('|') ?? '';
+    if (key !== this.civKey) {
+      this.civKey = key;
+      this.onSimBuildings();
+    }
+    if (this.atlasMode !== 'none' && POLITICAL_MODES.includes(this.atlasMode)) this.paintPolitical();
+    this.onWorldView?.();
+  }
+  private civKey = '';
+  atlasMode: AtlasMode = 'none';
+  onWorldView: (() => void) | null = null;
+
+  /** Atlas: natural maps come from the world grid, political ones from the living simulation. */
+  setAtlas(mode: AtlasMode): void {
+    this.atlasMode = mode;
+    if (POLITICAL_MODES.includes(mode)) this.paintPolitical();
+    else this.engine.setAtlasMode(mode);
+  }
+
+  private paintPolitical(): void {
+    const w = this.sim.world;
+    if (!w || !this.world) return;
+    const marks: PoliticalMark[] = [];
+    let maxPop = 1;
+    for (const s of this.settlements) maxPop = Math.max(maxPop, w.settlements[s.id]?.[1] ?? 0);
+    for (const s of this.settlements) {
+      const [civId, pop] = w.settlements[s.id] ?? [0, 0];
+      const civ = w.civs.find((c) => c.id === civId);
+      if (!civ || pop === 0) continue;
+      // a settlement's influence grows with its people
+      const radius = 160 + Math.sqrt(pop) * 38;
+      let color = CIV_COLORS_HEX[civ.color % CIV_COLORS_HEX.length];
+      let strength = 0.85;
+      if (this.atlasMode === 'population') {
+        color = 0xffb347;
+        strength = 0.35 + 0.65 * (pop / maxPop);
+      } else if (this.atlasMode === 'religions') {
+        let top = 0, n = 0;
+        for (const [f, c] of Object.entries(civ.followers)) if (c > n) { n = c; top = Number(f); }
+        if (!top) continue;
+        color = FAITH_COLORS_HEX[(top - 1) % FAITH_COLORS_HEX.length];
+      }
+      marks.push({ dir: s.dir, radius, color, strength });
+    }
+    this.engine.setPoliticalOverlay(this.atlasMode, marks);
   }
 
   /** Starts or stops the flow of time (the title screen and cinematics keep the world frozen). */
@@ -231,7 +297,7 @@ export class Game {
 
   get summary(): WorldSummary {
     const s = this.sim.snapshot?.summary;
-    return { population: s?.alive ?? 0, civilizations: 0, settlements: s?.inhabitedSettlements ?? 0, conflicts: 0 };
+    return { population: s?.alive ?? 0, civilizations: s?.civilizations ?? 0, settlements: s?.inhabitedSettlements ?? 0, conflicts: 0 };
   }
 
   setSpeed(index: number): void {

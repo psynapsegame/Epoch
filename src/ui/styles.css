@@ -251,3 +251,15 @@ input { -webkit-user-select: text; user-select: text; touch-action: manipulation
 .status small { color: var(--muted); display: block; }
 #inspector { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--dim) transparent; max-height: calc(100% - 160px); }
 #inspector .row { margin-top: 3px; }
+
+/* ---------- civilisations, history, labels ---------- */
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: baseline; border: 1px solid rgba(255, 255, 255, 0.25); }
+.search { width: 100%; padding: 11px 12px; background: rgba(10, 10, 12, 0.6); border: 1px solid var(--line); border-radius: 3px; color: var(--text); font: inherit; outline: 0; margin-bottom: 8px; }
+.search:focus { border-color: var(--gold); }
+.touch .search { font-size: 16px; min-height: 44px; }
+.timeline li button { color: var(--gold-bright); text-decoration: underline dotted; padding: 0; font: inherit; }
+.reign { display: flex; justify-content: space-between; gap: 8px; }
+#labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+#labels button { position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); pointer-events: auto; white-space: nowrap; padding: 5px 10px; border-radius: 12px; font-family: var(--serif); font-size: 11px; letter-spacing: 0.08em; color: var(--text); background: rgba(10, 11, 13, 0.72); border: 1px solid var(--line); will-change: transform; }
+#labels button small { color: var(--muted); margin-left: 6px; font-family: var(--sans); }
+.touch #labels button { padding: 9px 12px; font-size: 12px; }

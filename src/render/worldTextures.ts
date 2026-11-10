@@ -91,7 +91,21 @@ export function buildCloudTexture(seed: string, width = 1024): THREE.DataTexture
   return dataTexture(data, W, H);
 }
 
-export type AtlasMode = 'none' | 'elevation' | 'temperature' | 'moisture' | 'fertility' | 'biomes' | 'resources' | 'biodiversity' | 'landmasses';
+export type AtlasMode =
+  | 'none' | 'elevation' | 'temperature' | 'moisture' | 'fertility' | 'biomes' | 'resources' | 'biodiversity' | 'landmasses'
+  | 'borders' | 'population' | 'religions';
+
+/** Maps drawn from the living simulation rather than from the world grid. */
+export const POLITICAL_MODES: AtlasMode[] = ['borders', 'population', 'religions'];
+
+/** A settlement's zone of influence to paint on a political map. */
+export interface PoliticalMark {
+  dir: { x: number; y: number; z: number };
+  /** Radius in metres. */
+  radius: number;
+  color: number;
+  strength: number;
+}
 
 export const ATLAS_MODES: { id: AtlasMode; label: string; legend: [string, string][] }[] = [
   { id: 'none', label: 'Naturel', legend: [] },
@@ -103,6 +117,9 @@ export const ATLAS_MODES: { id: AtlasMode; label: string; legend: [string, strin
   { id: 'resources', label: 'Ressources', legend: [['#d8623a', 'Fer'], ['#3c3c46', 'Charbon'], ['#ffd23c', 'Or'], ['#b9b4aa', 'Pierre'], ['#2f7036', 'Bois']] },
   { id: 'biodiversity', label: 'Biodiversité', legend: [['#2b2b3a', 'Faible'], ['#3f8f7a', 'Moyenne'], ['#c8f06a', 'Foisonnante']] },
   { id: 'landmasses', label: 'Continents', legend: [] },
+  { id: 'borders', label: 'Frontières', legend: [] },
+  { id: 'population', label: 'Population', legend: [['#5a4424', 'Clairsemée'], ['#ffb347', 'Dense']] },
+  { id: 'religions', label: 'Religions', legend: [] },
 ];
 
 const BIOME_COL: Record<number, [number, number, number]> = {
@@ -134,6 +151,44 @@ const RAMP_BIO: [number, number, number, number][] = [[0, 43, 43, 58], [0.5, 63,
 const RES_COL: [number, number, number][] = [[216, 98, 58], [60, 60, 70], [255, 210, 60], [185, 180, 170]];
 
 /** Fills (or creates) the atlas overlay texture from live world data. Alpha = overlay strength. */
+/**
+ * Paints settlements' zones of influence over a dimmed map. Where zones of
+ * different colours overlap, the nearer settlement wins: borders emerge.
+ */
+export function buildPoliticalTexture(w: WorldData, marks: PoliticalMark[], tex: THREE.DataTexture): void {
+  const W = w.width, H = w.height;
+  const out = tex.image.data as Uint8Array;
+  for (let i = 0; i < W * H; i++) {
+    const o = i * 4, ocean = w.water[i] === Water.Ocean;
+    out[o] = out[o + 1] = out[o + 2] = 46;
+    out[o + 3] = ocean ? 0 : 165;
+  }
+  const best = new Float32Array(W * H).fill(2);
+  const cell = (2 * Math.PI * w.radius) / W;
+  for (const m of marks) {
+    const lat = Math.asin(m.dir.y), lon = Math.atan2(m.dir.z, m.dir.x);
+    const cy = (0.5 - lat / Math.PI) * H, cx = (lon / (2 * Math.PI) + 0.5) * W;
+    const ry = Math.ceil(m.radius / cell), rx = Math.ceil(ry / Math.max(0.1, Math.cos(lat)));
+    const r = (m.color >> 16) & 255, g = (m.color >> 8) & 255, b = m.color & 255;
+    for (let y = Math.max(0, Math.floor(cy - ry)); y <= Math.min(H - 1, Math.ceil(cy + ry)); y++) {
+      const cl = Math.cos(Math.PI / 2 - ((y + 0.5) / H) * Math.PI);
+      for (let dx = -rx; dx <= rx; dx++) {
+        const x = (((Math.floor(cx) + dx) % W) + W) % W;
+        const i = y * W + x;
+        if (w.water[i] === Water.Ocean) continue;
+        const d = Math.hypot((dx * cell * cl), (y + 0.5 - cy) * cell) / m.radius;
+        if (d > 1 || d >= best[i]) continue;
+        best[i] = d;
+        const o = i * 4;
+        const edge = d > 0.9 ? 0.6 : 1; // darker rim: a visible frontier
+        out[o] = r * edge; out[o + 1] = g * edge; out[o + 2] = b * edge;
+        out[o + 3] = Math.round(255 * Math.min(1, m.strength * (d > 0.9 ? 1 : 0.55 + 0.35 * (1 - d))));
+      }
+    }
+  }
+  tex.needsUpdate = true;
+}
+
 export function buildAtlasTexture(w: WorldData, mode: AtlasMode, existing?: THREE.DataTexture): THREE.DataTexture {
   const W = w.width, H = w.height;
   const tex = existing ?? dataTexture(new Uint8Array(W * H * 4), W, H);

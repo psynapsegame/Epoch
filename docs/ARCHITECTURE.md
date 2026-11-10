@@ -33,6 +33,8 @@ src/
                 populate.ts       population fondatrice (familles, hérédité)
                 simulation.ts     moteur déterministe : besoins, Utility AI, actions, liens, mort
                 economy.ts        prix, marché du travail, chantiers, foyers, unions et naissances
+                civilization.ts   peuples, dirigeants, dynasties, culture, croyances, colonies
+                tech.ts           arbre technologique et ses effets
                 pathfinding.ts    A* + lissage par lignes de vue
                 sim.worker.ts / simClient.ts   exécution dans un Web Worker, instantanés
                 text.ts           souvenirs → phrases (chaque phrase = un événement réel)

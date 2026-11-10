@@ -7,10 +7,12 @@ import '@fontsource/inter/600.css';
 import './styles.css';
 import type { Game } from '../game';
 import { SEASONS, SECONDS_PER_YEAR, SPEEDS } from '../sim/clock';
-import { BUILDING_NAMES, eventText, formatDate, memoryText } from '../sim/text';
+import { BUILDING_NAMES, TRADITION_NAMES, eventText, formatDate, memoryText } from '../sim/text';
+import { TECHS, TECH_BY_ID } from '../sim/tech';
+import { FAITH_COLORS_HEX, civCss } from '../render/palette';
 import {
-  ACTIVITY_LABELS, JOB_LABELS_F, JOB_LABELS_M, NEED_LABELS, RESOURCE_LABELS, SKILL_LABELS, TRAIT_LABELS,
-  type DeadPerson, type Person, type PersonView,
+  ACTIVITY_LABELS, CULTURE_AXES, GOVERNMENT_LABELS, JOB_LABELS_F, JOB_LABELS_M, NEED_LABELS, RESOURCE_LABELS, RULER_TITLES, SKILL_LABELS, TRAIT_LABELS,
+  type DeadPerson, type Person, type PersonView, type SimEvent,
 } from '../sim/types';
 import type { Building } from '../sim/settlements';
 import type { BuildingKind } from '../render/models/buildings';
@@ -33,7 +35,7 @@ const SECTIONS: { id: SectionId; label: string; phase: number }[] = [
   { id: 'chronicles', label: 'Chroniques', phase: 7 },
   { id: 'divinity', label: 'Divinité', phase: 6 },
 ];
-const CURRENT_PHASE = 3;
+const CURRENT_PHASE = 4;
 
 const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
   hut: ['Hutte', 'Abri rudimentaire pour une petite famille.'],
@@ -61,6 +63,7 @@ const el = <T extends HTMLElement>(html: string): T => {
   t.innerHTML = html.trim();
   return t.content.firstElementChild as T;
 };
+const faithCss = (id: number) => `#${FAITH_COLORS_HEX[(id - 1) % FAITH_COLORS_HEX.length].toString(16).padStart(6, '0')}`;
 const SEED_WORDS = ['Aurore', 'Cendre', 'Borée', 'Ys', 'Thulé', 'Ambre', 'Oriflamme', 'Solstice', 'Ether', 'Lumen', 'Mnémosyne', 'Avalon', 'Hespérie', 'Ogygie'];
 
 /** Whole user interface. Reads the game state; every control calls a real engine/game function. */
@@ -84,6 +87,10 @@ export class App {
   private panelHeld = false;
   private lastPopulationUpdate = 0;
   private econSite = 0;
+  private civShown = 0;
+  private historyFilter = 'all';
+  private labels: HTMLElement;
+  private labelNodes = new Map<number, HTMLButtonElement>();
   private shownBuilding = 0;
   private touch: boolean;
 
@@ -120,6 +127,8 @@ export class App {
       <div class="progress hidden"><div class="stage"></div><div class="track"><i></i></div></div>
     </div></div>`);
     this.toastEl = el(`<div id="toast" class="glass closed"></div>`);
+    this.labels = el(`<div id="labels" class="fade out"></div>`);
+    this.root.append(this.labels);
     this.root.append(this.topbar, this.nav, this.panel, this.inspector, this.viewbar, this.perf, this.tutorial, this.toastEl, this.intro, rotate);
 
     this.buildTopbar();
@@ -139,6 +148,12 @@ export class App {
       if (this.section === 'world') void this.renderWorldPanel();
     };
     game.engine.controls.onPan = () => { game.following = false; };
+    game.onWorldView = () => {
+      if (this.panelHeld) return;
+      if (this.section === 'civilizations') this.renderCivPanel();
+      if (this.section === 'politics') this.renderPoliticsPanel();
+      if (this.section === 'history' && document.activeElement?.tagName !== 'INPUT') this.renderHistoryPanel();
+    };
     game.onBuildings = () => {
       const b = game.buildings.find((x) => x.id === this.shownBuilding);
       if (b && !this.inspectorHeld && !this.inspector.classList.contains('closed') && !game.selected) this.showBuilding(b);
@@ -218,6 +233,7 @@ export class App {
   }
 
   private tick(): void {
+    this.updateLabels(); // every frame: they must stick to the moving world
     const now = performance.now();
     if (now - this.lastHud < 180) return;
     this.lastHud = now;
@@ -293,6 +309,9 @@ export class App {
     if (id === 'world') void this.renderWorldPanel();
     if (id === 'population') this.renderPopulationPanel();
     if (id === 'economy') this.renderEconomyPanel();
+    if (id === 'civilizations') this.renderCivPanel();
+    if (id === 'politics') this.renderPoliticsPanel();
+    if (id === 'history') this.renderHistoryPanel();
     if (id === 'atlas') {
       this.tutorialState.atlas = true;
       this.renderAtlasPanel();
@@ -406,12 +425,13 @@ export class App {
     const e = this.game.engine;
     this.panel.querySelector('h2')!.textContent = 'Atlas';
     const body = this.panel.querySelector('.body')!;
-    const mode = e.atlasModes.find((m) => m.id === e.atlas)!;
-    body.innerHTML = `<h3>Cartes</h3><div class="list">${e.atlasModes.map((m) => `<button class="row ${m.id === e.atlas ? 'on' : ''}" data-mode="${m.id}"><span class="name">${m.label}</span></button>`).join('')}</div>
+    const mode = e.atlasModes.find((m) => m.id === this.game.atlasMode) ?? e.atlasModes[0];
+    body.innerHTML = `<h3>Cartes</h3><div class="list">${e.atlasModes.map((m) => `<button class="row ${m.id === this.game.atlasMode ? 'on' : ''}" data-mode="${m.id}"><span class="name">${m.label}</span></button>`).join('')}</div>
       ${mode.legend.length ? `<h3>Légende</h3><div class="legend">${mode.legend.map(([c, l]) => `<div><i style="background:${c}"></i>${l}</div>`).join('')}</div>` : ''}
-      <p class="note">Chaque carte est tracée à partir des champs réels du monde (grille de ${fmt(this.game.world!.W)} × ${fmt(this.game.world!.H)} cellules). Populations, frontières, cultures, religions, commerce et guerres s’ajouteront avec les phases correspondantes.</p>`;
+      <p class="note">Chaque carte est tracée à partir des champs réels du monde (grille de ${fmt(this.game.world!.W)} × ${fmt(this.game.world!.H)} cellules). Frontières, population et religions sont peintes d’après la simulation en cours. Commerce et guerres s’ajouteront avec la phase 5.</p>
+      ${this.game.atlasMode === 'borders' || this.game.atlasMode === 'religions' ? `<h3>Légende</h3><div class="legend">${this.game.atlasMode === 'borders' ? (this.game.sim.world?.civs.filter((c) => !c.fallen).map((c) => `<div><i style="background:${civCss(c.color)}"></i>${esc(c.name)}</div>`).join('') ?? '') : (this.game.sim.world?.religions.filter((r) => !r.ended).map((r) => `<div><i style="background:${faithCss(r.id)}"></i>${esc(r.name)}</div>`).join('') ?? '')}</div>` : ''}`;
     body.querySelectorAll<HTMLElement>('[data-mode]').forEach((b) => b.addEventListener('click', () => {
-      e.setAtlasMode(b.dataset.mode as AtlasMode);
+      this.game.setAtlas(b.dataset.mode as AtlasMode);
       this.renderAtlasPanel();
     }));
   }
@@ -477,6 +497,9 @@ export class App {
     const name = (id: number) => (v.names[id] ? `${esc(v.names[id])}${v.deceased.includes(id) ? ' †' : ''}` : 'inconnu');
     const link = (id: number, role: string) => (v.names[id] ? `<button class="row" data-person="${id}"><span class="name">${name(id)}</span><small>${role}</small></button>` : '');
     const years = Math.floor(v.age);
+    const world = g.sim.world;
+    const ruled = v.alive ? world?.civs.find((c) => c.leader === p.id) : undefined;
+    const faith = v.alive ? world?.religions.find((r) => r.id === (p as Person).faith) : undefined;
     let body: string;
     if (v.alive) {
       const a = p as Person;
@@ -507,7 +530,7 @@ export class App {
     const html = `<button class="close" data-a="close">×</button>
       <div class="kicker">${v.alive ? 'Habitant' : 'Archives'} · n° ${p.id}</div>
       <h2>${esc(p.firstName)} ${esc(p.lastName)}</h2>
-      <div class="sub">${years} an${years > 1 ? 's' : ''} · ${female ? 'femme' : 'homme'} · ${esc(v.settlementName)}</div>
+      <div class="sub">${years} an${years > 1 ? 's' : ''} · ${female ? 'femme' : 'homme'} · ${esc(v.settlementName)}${ruled ? ` · ${RULER_TITLES[ruled.government][female ? 1 : 0]} du peuple de ${esc(ruled.name)}` : ''}${faith ? `<br>Fidèle : ${esc(faith.name)}` : ''}</div>
       ${body}
       ${absent.length ? `<h3>Famille</h3>${absent.map((id) => link(id, id === p.spouse ? 'Conjoint' : 'Parent')).join('')}` : ''}
       <h3>Chronologie</h3>
@@ -626,6 +649,177 @@ export class App {
     this.inspector.classList.remove('closed');
   }
 
+  // -------------------------------------------------------- civilisations
+  private placeName = (id: number): string => this.game.settlements.find((x) => x.id === id)?.name ?? 'terres lointaines';
+
+  /** Turns an event into a line whose people can be opened (living or dead). */
+  private eventLine(e: SimEvent): string {
+    let text = esc(eventText(e, this.placeName));
+    const link = (id: number | undefined, name: string | undefined) => {
+      if (!id || !name) return;
+      const n = esc(name);
+      if (text.includes(n)) text = text.replace(n, `<button data-person="${id}">${n}</button>`);
+    };
+    link(e.a, e.names?.[0]);
+    link(e.b, e.type === 'birth' || e.type === 'marriage' || e.type === 'ruler' || e.type === 'coup' ? e.names?.[1] : undefined);
+    return `<li><small>${formatDate(e.t)}${e.settlement ? ` · ${esc(this.placeName(e.settlement))}` : ''}</small>${text}</li>`;
+  }
+
+  private bindPanelLinks(body: HTMLElement): void {
+    body.querySelectorAll<HTMLElement>('[data-person]').forEach((b) => b.addEventListener('click', () => this.selectPerson(Number(b.dataset.person), true)));
+    body.querySelectorAll<HTMLElement>('[data-civ]').forEach((b) => b.addEventListener('click', () => {
+      this.civShown = Number(b.dataset.civ);
+      this.openSection('civilizations');
+    }));
+    body.querySelectorAll<HTMLElement>('[data-place]').forEach((b) => b.addEventListener('click', () => {
+      const st = this.game.settlements.find((x) => x.id === Number(b.dataset.place));
+      if (st) this.game.engine.controls.flyTo(new THREE.Vector3(st.dir.x, st.dir.y, st.dir.z), 320, 0.95);
+    }));
+  }
+
+  /** A people: its ruler and houses, culture, beliefs, knowledge and lands. */
+  private renderCivPanel(): void {
+    const g = this.game;
+    this.panel.querySelector('h2')!.textContent = 'Civilisations';
+    const body = this.panel.querySelector<HTMLElement>('.body')!;
+    const w = g.sim.world;
+    if (!w || !w.civs.length) { body.innerHTML = '<p class="note">Aucun peuple encore.</p>'; return; }
+    if (!w.civs.some((c) => c.id === this.civShown)) this.civShown = w.civs.find((c) => !c.fallen)?.id ?? w.civs[0].id;
+    const c = w.civs.find((x) => x.id === this.civShown)!;
+    const title = (sex: number) => RULER_TITLES[c.government][sex];
+    // RULER_TITLES holds [masculine, feminine]; a person's sex is 0 for a woman
+    const leaderSex = g.sim.rosterById.get(c.leader)?.sex === 0 ? 1 : 0;
+    const research = c.research.tech ? TECH_BY_ID.get(c.research.tech) : undefined;
+    const rel = w.religions.find((r) => r.id === c.religion);
+    const faiths = Object.entries(c.followers).map(([id, n]) => [w.religions.find((r) => r.id === Number(id)), n] as const).filter((x) => x[0]).sort((a, b) => b[1] - a[1]);
+    const top = body.scrollTop;
+    body.innerHTML = `
+      <div class="btns">${w.civs.map((x) => `<button class="btn ${x.id === c.id ? 'primary' : ''}" data-civ="${x.id}"><span class="dot" style="background:${civCss(x.color)}"></span>${esc(x.name)}${x.fallen ? ' †' : ''}</button>`).join('')}</div>
+      <h3>Peuple de ${esc(c.name)}</h3>
+      <div class="kv"><span>Nom du peuple</span><b>${esc(c.culture.people)}</b><span>Né en</span><b>${formatDate(c.founded)}</b>
+        <span>Population</span><b>${fmt(c.population)}</b><span>Régime</span><b>${GOVERNMENT_LABELS[c.government]}</b>
+        ${c.fallen ? `<span>Éteint en</span><b>${formatDate(c.fallen)}</b>` : ''}</div>
+      ${c.leader ? `<h3>${title(leaderSex)}</h3><button class="row" data-person="${c.leader}"><span class="name">${esc(c.leaderName)}</span><small>au pouvoir</small></button>${this.meter('Légitimité', c.legitimacy)}` : ''}
+      <h3>Maisons régnantes</h3>
+      ${c.dynasties.map((d) => `<p class="note" style="margin:6px 0 2px;color:var(--gold-bright)">Maison ${esc(d.name)} — depuis ${formatDate(d.from)}</p>${d.rulers.map((r) => `<button class="row" data-person="${r.person}"><span class="name">${esc(r.name)}</span><small>${({ founding: 'fondation', election: 'élection', inheritance: 'héritage', coup: 'coup de force', revolt: 'révolte' } as Record<string, string>)[r.how]} · ${formatDate(r.from).replace('An ', 'an ')}${r.to ? ` → ${formatDate(r.to).replace('An ', 'an ')}` : ''}</small></button>`).join('')}`).join('')}
+      <h3>Terres</h3><div class="list">${c.settlements.map((id) => `<button class="row" data-place="${id}"><span class="name">${esc(this.placeName(id))}${id === c.capital ? ' ★' : ''}</span><small>${this.tier(w.settlements[id]?.[1] ?? 0)} · ${w.settlements[id]?.[1] ?? 0} hab.</small></button>`).join('') || '<p class="note">Plus aucune terre.</p>'}</div>
+      <h3>Culture</h3>${CULTURE_AXES.map((l, i) => this.meter(l, c.culture.values[i], 'calm')).join('')}
+      <p class="note">Tradition : ${TRADITION_NAMES[c.culture.traditions[0]] ?? '—'}, chaque année au jour ${c.culture.festivalDay + 1} si les greniers le permettent. Les enfants grandissent dans ces valeurs.</p>
+      <h3>Croyances</h3>${rel ? `<p class="note" style="margin-top:0">Culte du peuple : <b style="color:var(--text)">${esc(rel.name)}</b>, fondé par ${esc(rel.founderName)} (${formatDate(rel.founded)}).</p>${this.meter('Ferveur', rel.fervor, 'calm')}` : '<p class="note" style="margin-top:0">Aucune croyance commune encore.</p>'}
+      ${faiths.map(([r, n]) => `<div class="meter"><span>${esc(r!.name)}</span><div class="bar"><i class="calm" style="width:${(n / Math.max(1, c.population)) * 100}%"></i></div><b>${n}</b></div>`).join('')}
+      <h3>Savoir (${c.techs.length} / ${TECHS.length})</h3>
+      ${research ? `<div class="status"><b>À l’étude : ${research.name}</b><small>${research.effect}</small></div>${this.meter('Avancement', c.research.progress / research.cost)}` : '<p class="note">Tout ce qui pouvait être appris l’a été.</p>'}
+      <ul class="timeline">${c.techs.map((id) => TECH_BY_ID.get(id)).filter(Boolean).reverse().map((t) => `<li><small>${t!.field}</small>${t!.name} — ${t!.effect}</li>`).join('')}</ul>`;
+    body.scrollTop = top;
+    this.bindPanelLinks(body);
+  }
+
+  /** Who rules whom, how, and how firmly. */
+  private renderPoliticsPanel(): void {
+    const g = this.game;
+    this.panel.querySelector('h2')!.textContent = 'Politique';
+    const body = this.panel.querySelector<HTMLElement>('.body')!;
+    const w = g.sim.world;
+    if (!w) { body.innerHTML = '<p class="note">La simulation démarre…</p>'; return; }
+    const events = w.events.filter((e) => e.type === 'ruler' || e.type === 'coup' || e.type === 'government' || e.type === 'civ' || e.type === 'colony').slice(-25).reverse();
+    const top = body.scrollTop;
+    body.innerHTML = `<h3>Pouvoirs en place</h3>
+      ${w.civs.filter((c) => !c.fallen).map((c) => {
+        const sex = g.sim.rosterById.get(c.leader)?.sex === 0 ? 1 : 0;
+        const house = c.dynasties[c.dynasties.length - 1];
+        return `<button class="row" data-civ="${c.id}"><span><span class="dot" style="background:${civCss(c.color)}"></span><span class="name">${esc(c.name)}</span><br><small>${GOVERNMENT_LABELS[c.government]} · ${c.population} hab. · ${c.settlements.length} terre${c.settlements.length > 1 ? 's' : ''}</small></span></button>
+          ${c.leader ? `<button class="row" data-person="${c.leader}"><span class="name">${esc(c.leaderName)}</span><small>${RULER_TITLES[c.government][sex]} · maison ${esc(house?.name ?? '')} (${house?.rulers.length ?? 1}ᵉ règne)</small></button>` : ''}
+          ${this.meter('Légitimité', c.legitimacy)}`;
+      }).join('<div style="height:8px"></div>')}
+      <p class="note">La légitimité suit le sort du peuple (faim, famine), l’habileté du dirigeant et la ferveur partagée. Trop basse, elle ouvre la voie aux usurpateurs et aux révoltes.</p>
+      <h3>Événements politiques</h3><ul class="timeline">${events.map((e) => this.eventLine(e)).join('') || '<li>Rien encore.</li>'}</ul>`;
+    body.scrollTop = top;
+    this.bindPanelLinks(body);
+  }
+
+  /** The chronicle of recorded events, and the archives of everyone who ever lived. */
+  private renderHistoryPanel(): void {
+    const g = this.game;
+    this.panel.querySelector('h2')!.textContent = 'Histoire';
+    const body = this.panel.querySelector<HTMLElement>('.body')!;
+    const w = g.sim.world;
+    if (!w) { body.innerHTML = '<p class="note">La simulation démarre…</p>'; return; }
+    const groups: Record<string, string[]> = {
+      all: [], power: ['civ', 'ruler', 'coup', 'government', 'colony'], mind: ['tech', 'religion', 'schism', 'faithEnd', 'festival'],
+      life: ['birth', 'death', 'marriage'], works: ['built', 'famine', 'harvest', 'trade', 'shortage', 'founded'],
+    };
+    const labels: Record<string, string> = { all: 'Grands faits', power: 'Pouvoir', mind: 'Esprit', life: 'Vies', works: 'Travaux' };
+    const minor = new Set(['birth', 'trade', 'project', 'shortage', 'marriage', 'festival', 'built', 'death', 'harvest']);
+    const f = this.historyFilter;
+    const events = w.events.filter((e) => (f === 'all' ? !minor.has(e.type) : groups[f].includes(e.type))).slice(-70).reverse();
+    const top = body.scrollTop;
+    const existing = body.querySelector<HTMLInputElement>('.search');
+    const query = existing?.value ?? '';
+    body.innerHTML = `<h3>Archives</h3>
+      <input class="search" placeholder="Rechercher une personne, vivante ou morte…" value="${esc(query)}" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" />
+      <div class="list" id="hits"></div>
+      <h3>Chronologie</h3>
+      <div class="btns">${Object.keys(groups).map((k) => `<button class="btn ${k === f ? 'primary' : ''}" data-filter="${k}">${labels[k]}</button>`).join('')}</div>
+      <ul class="timeline" style="margin-top:8px">${events.map((e) => this.eventLine(e)).join('') || '<li>Rien encore dans cette catégorie.</li>'}</ul>
+      <p class="note">Chaque ligne est un événement enregistré par la simulation ; les noms mènent aux fiches, y compris celles des défunts.</p>`;
+    body.scrollTop = top;
+    body.querySelectorAll<HTMLElement>('[data-filter]').forEach((b) => b.addEventListener('click', () => { this.historyFilter = b.dataset.filter!; this.renderHistoryPanel(); }));
+    const input = body.querySelector<HTMLInputElement>('.search')!;
+    const hits = body.querySelector<HTMLElement>('#hits')!;
+    const run = async () => {
+      const q = input.value.trim();
+      if (q.length < 2) { hits.innerHTML = ''; return; }
+      const found = await g.sim.search(q);
+      if (input.value.trim() !== q) return;
+      hits.innerHTML = found.map((h) => `<button class="row" data-person="${h.id}"><span class="name">${esc(h.name)}${h.alive ? '' : ' †'}</span><small>${esc(this.placeName(h.settlement))} · ${h.alive ? 'en vie' : `mort${''} ${formatDate(h.death).replace('An ', 'an ')}`}</small></button>`).join('') || '<p class="note">Personne de ce nom dans les archives.</p>';
+      this.bindPanelLinks(hits);
+    };
+    input.addEventListener('input', () => void run());
+    if (query) void run();
+    this.bindPanelLinks(body);
+  }
+
+  /** Name tags floating over inhabited settlements (tap to visit). */
+  private updateLabels(): void {
+    const g = this.game;
+    const w = g.sim.world;
+    if (!w || !g.world || !g.running) return;
+    const cam = g.engine.camera;
+    const rect = g.engine.canvas.getBoundingClientRect();
+    const camLen = cam.position.length();
+    const horizon = Math.acos(Math.min(1, g.world.R / camLen)) + 0.05;
+    const v = new THREE.Vector3();
+    const seen = new Set<number>();
+    const far = g.engine.controls.distance > 260;
+    for (const s of g.settlements) {
+      const [civId, pop] = w.settlements[s.id] ?? [0, 0];
+      if (!pop) continue;
+      v.set(s.dir.x, s.dir.y, s.dir.z);
+      const visible = far && Math.acos(Math.min(1, v.dot(cam.position) / camLen)) < horizon;
+      if (!visible) continue;
+      v.multiplyScalar(g.world.R + 60).project(cam);
+      if (v.z > 1 || Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1) continue;
+      seen.add(s.id);
+      let node = this.labelNodes.get(s.id);
+      if (!node) {
+        node = document.createElement('button');
+        node.addEventListener('click', () => {
+          g.engine.controls.flyTo(new THREE.Vector3(s.dir.x, s.dir.y, s.dir.z), 200, 1.0);
+          this.civShown = (g.sim.world?.settlements[s.id]?.[0]) ?? 0;
+          this.openSection('civilizations');
+        });
+        this.labels.append(node);
+        this.labelNodes.set(s.id, node);
+      }
+      const civ = w.civs.find((c) => c.id === civId);
+      const html = `<span class="dot" style="background:${civ ? civCss(civ.color) : '#777'}"></span>${esc(s.name)}<small>${pop}</small>`;
+      if (node.dataset.html !== html) { node.innerHTML = html; node.dataset.html = html; }
+      node.style.transform = `translate(-50%, -100%) translate(${((v.x * 0.5 + 0.5) * rect.width).toFixed(1)}px, ${((-v.y * 0.5 + 0.5) * rect.height).toFixed(1)}px)`;
+      node.style.display = '';
+    }
+    for (const [id, node] of this.labelNodes) if (!seen.has(id)) node.style.display = 'none';
+  }
+
   // -------------------------------------------------------------- economy
   /** Stocks, prices, trades, building sites and journal of one settlement — live simulation data. */
   private renderEconomyPanel(): void {
@@ -674,11 +868,13 @@ export class App {
 
   // ---------------------------------------------------------------- intro
   private hud(show: boolean): void {
-    for (const n of [this.topbar, this.nav, this.viewbar]) n.classList.toggle('out', !show);
+    for (const n of [this.topbar, this.nav, this.viewbar, this.labels]) n.classList.toggle('out', !show);
     if (!show) {
       this.openSection(null);
       this.closeInspector();
       this.tutorial.classList.add('hidden');
+      for (const n of this.labelNodes.values()) n.remove();
+      this.labelNodes.clear();
     }
   }
 

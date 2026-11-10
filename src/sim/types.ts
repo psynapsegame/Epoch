@@ -16,12 +16,14 @@ export enum Activity {
   Shopping = 10,
   Building = 11,
   Trading = 12,
+  Praying = 13,
+  Migrating = 14,
 }
-export const ACTIVITY_COUNT = 13;
+export const ACTIVITY_COUNT = 15;
 
 export const ACTIVITY_LABELS: Record<number, string> = {
   0: 'Flâne', 1: 'Cueille et chasse', 2: 'Mange', 3: 'Boit', 4: 'Dort', 5: 'Discute', 6: 'Explore', 7: 'Se repose au foyer', 8: 'Joue',
-  9: 'Travaille', 10: 'S’approvisionne', 11: 'Bâtit', 12: 'En voyage de commerce',
+  9: 'Travaille', 10: 'S’approvisionne', 11: 'Bâtit', 12: 'En voyage de commerce', 13: 'Prie au temple', 14: 'Part fonder une colonie',
 };
 
 /** Phases of an action. */
@@ -51,24 +53,24 @@ export const RESOURCE_COUNT = 8;
 /** Reference prices in coins per unit. */
 export const BASE_PRICE = [1, 0.8, 1.2, 3, 2, 12, 8, 5];
 
-export const JOBS = ['gatherer', 'farmer', 'herder', 'fisher', 'woodcutter', 'miner', 'builder', 'smith', 'artisan', 'merchant'] as const;
-export const JOB_LABELS_M = ['Cueilleur', 'Agriculteur', 'Éleveur', 'Pêcheur', 'Bûcheron', 'Mineur', 'Bâtisseur', 'Forgeron', 'Artisan', 'Marchand'];
-export const JOB_LABELS_F = ['Cueilleuse', 'Agricultrice', 'Éleveuse', 'Pêcheuse', 'Bûcheronne', 'Mineuse', 'Bâtisseuse', 'Forgeronne', 'Artisane', 'Marchande'];
-export const enum J { Gatherer, Farmer, Herder, Fisher, Woodcutter, Miner, Builder, Smith, Artisan, Merchant }
-export const JOB_COUNT = 10;
+export const JOBS = ['gatherer', 'farmer', 'herder', 'fisher', 'woodcutter', 'miner', 'builder', 'smith', 'artisan', 'merchant', 'researcher', 'leader'] as const;
+export const JOB_LABELS_M = ['Cueilleur', 'Agriculteur', 'Éleveur', 'Pêcheur', 'Bûcheron', 'Mineur', 'Bâtisseur', 'Forgeron', 'Artisan', 'Marchand', 'Savant', 'Dirigeant'];
+export const JOB_LABELS_F = ['Cueilleuse', 'Agricultrice', 'Éleveuse', 'Pêcheuse', 'Bûcheronne', 'Mineuse', 'Bâtisseuse', 'Forgeronne', 'Artisane', 'Marchande', 'Savante', 'Dirigeante'];
+export const enum J { Gatherer, Farmer, Herder, Fisher, Woodcutter, Miner, Builder, Smith, Artisan, Merchant, Researcher, Leader }
+export const JOB_COUNT = 12;
 
 /** Skills: one per profession, then eloquence and exploration. */
-export const SKILL_SOCIAL = 10;
-export const SKILL_EXPLORE = 11;
-export const SKILL_COUNT = 12;
+export const SKILL_SOCIAL = 12;
+export const SKILL_EXPLORE = 13;
+export const SKILL_COUNT = 14;
 export const SKILL_LABELS = [
-  'Cueillette et chasse', 'Agriculture', 'Élevage', 'Pêche', 'Bûcheronnage', 'Extraction', 'Construction', 'Forge', 'Artisanat', 'Négoce',
+  'Cueillette et chasse', 'Agriculture', 'Élevage', 'Pêche', 'Bûcheronnage', 'Extraction', 'Construction', 'Forge', 'Artisanat', 'Négoce', 'Savoir', 'Gouvernement',
   'Éloquence', 'Exploration',
 ];
 
 export type MemoryType =
   | 'born' | 'settled' | 'married' | 'child' | 'friend' | 'quarrel' | 'discovery' | 'hunger' | 'gift' | 'received' | 'mourning' | 'feast'
-  | 'job' | 'built' | 'journey' | 'home';
+  | 'job' | 'built' | 'journey' | 'home' | 'ruler' | 'deposed' | 'faith' | 'prophet' | 'colonist' | 'discoveryTech';
 
 export interface Memory {
   /** Simulated time of the event. */
@@ -103,6 +105,8 @@ export interface Person {
   /** Profession (see JOBS) and the building where it is practised (0 = none). */
   job: number;
   workplace: number;
+  /** Religion followed (0 = none). */
+  faith: number;
   /** End of pregnancy (simulated time), 0 when not expecting. */
   pregnantUntil: number;
   lastBirth: number;
@@ -144,8 +148,8 @@ export interface Person {
 export interface Trip {
   /** Destination settlement. */
   to: number;
-  /** 1 = outbound, 2 = returning. */
-  stage: 1 | 2;
+  /** 1 = outbound, 2 = returning, 3 = one-way migration to found or join a colony. */
+  stage: 1 | 2 | 3;
   depart: number;
   arrive: number;
   /** Local coordinates of both ends in the home settlement's frame. */
@@ -222,9 +226,15 @@ export interface SettlementState {
   projects: number[];
   /** Consecutive days with an empty granary. */
   hungryDays: number;
+  /** Civilisation the settlement belongs to (0 = unclaimed land). */
+  civ: number;
+  /** Simulated time of its (re)foundation by its current people. */
+  founded: number;
 }
 
-export type SimEventType = 'founded' | 'birth' | 'death' | 'marriage' | 'project' | 'built' | 'famine' | 'harvest' | 'trade' | 'shortage';
+export type SimEventType =
+  | 'founded' | 'birth' | 'death' | 'marriage' | 'project' | 'built' | 'famine' | 'harvest' | 'trade' | 'shortage'
+  | 'civ' | 'ruler' | 'coup' | 'government' | 'tech' | 'religion' | 'schism' | 'faithEnd' | 'colony' | 'festival';
 
 /** A dated fact recorded by the simulation (seed of the future chronicles). */
 export interface SimEvent {
@@ -239,6 +249,8 @@ export interface SimEvent {
   /** Names frozen at the time of the event, so the record survives the people. */
   names?: string[];
   value?: number;
+  /** Civilisation concerned, when the event is political or cultural. */
+  civ?: number;
 }
 
 export interface SimState {
@@ -254,12 +266,95 @@ export interface SimState {
   buildings: SimBuilding[];
   settlements: SettlementState[];
   events: SimEvent[];
+  civs: Civilization[];
+  religions: Religion[];
   nextBuildingId: number;
   /** Ticks merged per step: 1 = finest; raised at very high speeds (coarser, aggregated simulation). */
   stride: number;
 }
 
-export const SIM_STATE_VERSION = 2;
+export const SIM_STATE_VERSION = 3;
+
+// ------------------------------------------------------- civilisations
+export type Government = 'chiefdom' | 'monarchy' | 'council';
+export const GOVERNMENT_LABELS: Record<Government, string> = { chiefdom: 'Chefferie', monarchy: 'Monarchie héréditaire', council: 'Conseil des sages' };
+export const RULER_TITLES: Record<Government, [string, string]> = { chiefdom: ['Chef', 'Cheffe'], monarchy: ['Roi', 'Reine'], council: ['Premier sage', 'Première sage'] };
+
+/** How power was obtained. */
+export type Accession = 'founding' | 'election' | 'inheritance' | 'coup' | 'revolt';
+
+export interface Reign {
+  person: number;
+  name: string;
+  from: number;
+  /** 0 while reigning. */
+  to: number;
+  how: Accession;
+}
+
+export interface Dynasty {
+  /** Family name of the house. */
+  name: string;
+  founder: number;
+  from: number;
+  rulers: Reign[];
+}
+
+/** Cultural axes, each 0..1: martial, communal, mercantile, scholarly. */
+export const CULTURE_AXES = ['Martiale', 'Solidaire', 'Marchande', 'Savante'];
+
+export interface Culture {
+  /** Name of the people, e.g. "Tyrethiens". */
+  people: string;
+  values: number[];
+  /** Tradition codes (see civilization.ts). */
+  traditions: string[];
+  /** Day of the year of the great yearly festival. */
+  festivalDay: number;
+}
+
+export interface Civilization {
+  id: number;
+  name: string;
+  /** Index into the civilisation colour palette (banners, roofs, borders). */
+  color: number;
+  capital: number;
+  founded: number;
+  /** Current ruler (person id; 0 during an interregnum). */
+  leader: number;
+  government: Government;
+  /** 0..1: how willingly people accept the ruler. */
+  legitimacy: number;
+  /** Ruling houses in order; the last one reigns. */
+  dynasties: Dynasty[];
+  culture: Culture;
+  /** State religion (0 = none yet). */
+  religion: number;
+  techs: string[];
+  /** Technology being studied and points accumulated. */
+  research: { tech: string | null; progress: number };
+  lastColony: number;
+  /** True once every settlement is gone: kept for history. */
+  fallen: number;
+}
+
+export interface Religion {
+  id: number;
+  name: string;
+  /** What is venerated: 'sea' | 'sun' | 'mountain' | 'forest' | 'river' | 'ancestors' | 'fire' | 'stars'. */
+  focus: string;
+  founder: number;
+  founderName: string;
+  founded: number;
+  /** Civilisation where it was born. */
+  origin: number;
+  /** Religion it split from (0 = original). */
+  parent: number;
+  /** 0..1 intensity of devotion. */
+  fervor: number;
+  /** Simulated time it lost its last follower (0 = alive). */
+  ended: number;
+}
 
 // ------------------------------------------------------------ static sites
 
@@ -270,6 +365,8 @@ export interface SiteNeighbor {
   e: number;
   n: number;
   distance: number;
+  /** True when reaching it means crossing the sea (needs sailing). */
+  overSea: boolean;
 }
 
 /**
@@ -304,6 +401,9 @@ export interface SimSite {
   water: { e: number; n: number }[];
   radius: number;
   neighbors: SiteNeighbor[];
+  /** Mean fertility of the walkable land (0..1) and share of sea, used to judge a place before settling it. */
+  richness: number;
+  coastal: boolean;
 }
 
 /** A building as placed by the world's founders (phase 1 layout), in local coordinates. */
@@ -341,6 +441,7 @@ export interface PopulationSummary {
   inhabitedSettlements: number;
   byJob: number[];
   births: number;
+  civilizations: number;
 }
 
 /** Static identity of a person for lists and rendering. */
@@ -374,7 +475,20 @@ export interface SettlementView {
   projects: { id: number; kind: string; progress: number; missing: number[] }[];
   buildings: number;
   housing: number;
+  civ: number;
 }
+
+/** Political and cultural picture of the world for the interface. */
+export interface WorldView {
+  civs: (Civilization & { population: number; settlements: number[]; leaderName: string; followers: Record<number, number> })[];
+  religions: (Religion & { followers: number })[];
+  /** Settlement id -> [civ, population]. */
+  settlements: Record<number, [number, number]>;
+  /** Most recent recorded events of the whole world, oldest first. */
+  events: SimEvent[];
+}
+
+export interface SearchHit { id: number; name: string; alive: boolean; birth: number; death: number; settlement: number }
 
 export interface EconomyView {
   settlements: SettlementView[];

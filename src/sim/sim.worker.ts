@@ -14,6 +14,7 @@ export type ToWorker =
   | { type: 'rate'; rate: number; stride: number }
   | { type: 'watch'; id: number }
   | { type: 'state'; request: number }
+  | { type: 'search'; request: number; query: string }
   | { type: 'stop' };
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -26,6 +27,7 @@ let lastSnapshot = 0, lastDetail = 0, lastState = 0, lastRoster = 0, lastBuildin
 let rosterVersion = -1;
 let buildingsVersion = -1;
 let lastEconomy = 0;
+let lastWorld = 0;
 
 function postSnapshot(lagging: boolean): void {
   if (!sim) return;
@@ -50,6 +52,8 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
       last = performance.now();
       postRoster();
       postSnapshot(false);
+      lastWorld = 0;
+      lastEconomy = 0;
       ctx.postMessage({ type: 'state', state: sim.serialize(), request: 0 });
       break;
     case 'rate':
@@ -60,6 +64,9 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
     case 'watch':
       watch = m.id;
       lastDetail = 0;
+      break;
+    case 'search':
+      ctx.postMessage({ type: 'search', request: m.request, hits: sim ? sim.search(m.query) : [] });
       break;
     case 'state':
       if (sim) ctx.postMessage({ type: 'state', state: sim.serialize(), request: m.request });
@@ -99,6 +106,10 @@ setInterval(() => {
   if (now - lastEconomy > 1000) {
     lastEconomy = now;
     ctx.postMessage({ type: 'economy', economy: sim.economy() });
+  }
+  if (now - lastWorld > 2000) {
+    lastWorld = now;
+    ctx.postMessage({ type: 'world', world: sim.worldView() });
   }
   if (ticks > 0 || now - lastSnapshot > 500) {
     lastSnapshot = now;

@@ -17,6 +17,8 @@ export interface Building {
   radius: number;
   /** Construction progress 0..1 (absent = complete). */
   progress?: number;
+  /** Banner colour of the owning civilisation (hex), if any. */
+  tint?: number;
 }
 
 export interface Settlement {

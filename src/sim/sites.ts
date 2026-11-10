@@ -91,16 +91,23 @@ export function buildSimSite(world: World, settlement: Settlement, all: Settleme
     if (o.id === settlement.id) continue;
     const dot = o.dir.x * c.x + o.dir.y * c.y + o.dir.z * c.z;
     const distance = Math.acos(Math.max(-1, Math.min(1, dot))) * R;
-    if (distance > 3600 || dot < 0.3 || d.landmassId[world.cellAt(o.dir.x, o.dir.y, o.dir.z)] !== land) continue;
+    if (distance > 3600 || dot < 0.3) continue;
+    const overSea = d.landmassId[world.cellAt(o.dir.x, o.dir.y, o.dir.z)] !== land;
     // gnomonic projection: straight lines in the local frame are great circles
     const qx = o.dir.x / dot - c.x, qy = o.dir.y / dot - c.y, qz = o.dir.z / dot - c.z;
-    neighbors.push({ id: o.id, e: (qx * east.x + qy * east.y + qz * east.z) * R, n: (qx * north.x + qy * north.y + qz * north.z) * R, distance });
+    neighbors.push({ id: o.id, e: (qx * east.x + qy * east.y + qz * east.z) * R, n: (qx * north.x + qy * north.y + qz * north.z) * R, distance, overSea });
   }
   neighbors.sort((a, b) => a.distance - b.distance || a.id - b.id);
 
+  let fert = 0, land2 = 0, sea = 0;
+  for (let k = 0; k < walk.length; k++) {
+    if (walk[k]) { fert += fertility[k]; land2++; }
+    if (kind[k] === 2) sea++;
+  }
   return {
     id: settlement.id, name: settlement.name, longitude: Math.atan2(c.z, c.x), temperature: d.temperature[cw], sinLatitude: c.y,
     size, cell, walk, kind, forage, fertility, wood, mineral, water, radius: settlement.radius, neighbors,
+    richness: land2 ? fert / land2 / 255 : 0, coastal: sea > 40,
   };
 }
 

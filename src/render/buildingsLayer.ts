@@ -37,7 +37,7 @@ export class BuildingsLayer {
    * changed (not just their construction progress).
    */
   sync(world: World, buildings: Building[]): boolean {
-    const signature = buildings.map((b) => b.id).join(',');
+    const signature = buildings.map((b) => `${b.id}:${b.tint ?? ''}`).join(',');
     if (signature === this.signature && buildings.length) {
       // same buildings: only construction progress moved
       for (const [kind, mesh] of this.meshes) {
@@ -77,7 +77,10 @@ export class BuildingsLayer {
       list.forEach((b, i) => build.setXY(i, b.progress ?? 1, model.height));
       geo.setAttribute('aBuild', build);
       const inst = new THREE.InstancedMesh(geo, this.material, list.length);
+      const tint = new THREE.Color(), white = new THREE.Color(1, 1, 1);
       list.forEach((b, i) => {
+        // roofs and walls take a hint of the people's colour
+        inst.setColorAt(i, b.tint === undefined ? white : tint.setHex(b.tint).lerp(white, 0.72));
         y.set(b.dir.x, b.dir.y, b.dir.z);
         z.set(b.facing.x, b.facing.y, b.facing.z);
         x.crossVectors(y, z).normalize();

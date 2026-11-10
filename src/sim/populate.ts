@@ -24,7 +24,7 @@ export function blankPerson(rng: Rng, id: number, sex: 0 | 1, birth: number, las
     traits: Array.from({ length: 9 }, () => trait(rng)),
     needs: [0.55 + rng.next() * 0.4, 0.55 + rng.next() * 0.4, 0.6 + rng.next() * 0.35, 0.9, 0.9, 0.5 + rng.next() * 0.4],
     skills: new Array<number>(SKILL_COUNT).fill(0),
-    health: 1, job: 0, workplace: 0, pregnantUntil: 0, lastBirth: -1e12,
+    health: 1, job: 0, workplace: 0, faith: 0, pregnantUntil: 0, lastBirth: -1e12,
     household, settlement, spouse: 0, parents: [0, 0], children: [], bonds: {},
     memories: [{ t: birth, type: 'born', place }],
     e: 0, n: 0, activity: Activity.Idle, phase: Phase.Do, te: 0, tn: 0, path: [], until: time, partner: 0,
@@ -84,11 +84,13 @@ export function createPopulation(seedRng: Rng, sites: SimSite[], buildings: SimB
 
   // The founders settle the three best sites rather than crowding into one.
   const quota = Math.ceil(count / Math.min(3, Math.max(1, sites.length)));
-  outer: for (const site of sites) {
-    const baseSkin = rng.int(1, SKIN_TONES - 2);
-    const siteStart = persons.length;
+  const skins = sites.map(() => rng.int(1, SKIN_TONES - 2));
+  // second pass (quota lifted) houses whoever is left in the same three places: nobody founds a village alone
+  outer: for (let pass = 0; pass < 2; pass++) for (const site of sites.slice(0, 3)) {
+    const baseSkin = skins[sites.indexOf(site)];
+    const siteStart = pass === 0 ? persons.length : -1e9;
     const homes = buildings
-      .filter((b) => b.settlement === site.id && dwellingCapacity(b.kind) > 0)
+      .filter((b) => b.settlement === site.id && dwellingCapacity(b.kind) > 0 && !households.some((h) => h.building === b.id))
       .sort((a, b) => Math.hypot(a.e, a.n) - Math.hypot(b.e, b.n) || a.id - b.id);
     for (const home of homes) {
       if (count - persons.length <= 0) break outer;

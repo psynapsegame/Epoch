@@ -1,14 +1,16 @@
 import { Rng, hashString } from '../core/rng';
 import { clamp01 } from '../core/math';
 import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour, seasonPhase } from './clock';
-import { BUILD_COST, ageAt, dailyUpdate, isAdult, stockTargets, updatePrices, workOnProject } from './economy';
+import { addResearch, contact, foundCivilization, onDeath } from './civilization';
+import { BUILD_COST, ageAt, countKind, dailyUpdate, isAdult, stockTargets, updatePrices, workOnProject } from './economy';
+import { BASE_MODS, modsFor, type Mods } from './tech';
 import { cellOf, findPath, isWalkable, nearestWalkable } from './pathfinding';
 import { blankPerson, createPopulation } from './populate';
 import { dwellingCapacity } from './sites';
 import {
   ACTIVITY_COUNT, Activity, BASE_PRICE, J, JOB_COUNT, N, Phase, R, RESOURCE_COUNT, SIM_STATE_VERSION, SKILL_EXPLORE, SKILL_SOCIAL, T,
-  type DeadPerson, type EconomyView, type FoundingBuilding, type Household, type Memory, type Person, type PersonView, type PopulationSummary,
-  type RosterEntry, type SettlementState, type SettlementView, type SimBuilding, type SimEvent, type SimEventType, type SimSite, type SimState, type Snapshot,
+  type Civilization, type DeadPerson, type EconomyView, type FoundingBuilding, type Household, type Memory, type Person, type PersonView, type PopulationSummary,
+  type RosterEntry, type SettlementState, type SettlementView, type SimBuilding, type SimEvent, type SimEventType, type SearchHit, type SimSite, type SimState, type Snapshot, type WorldView,
 } from './types';
 
 const TICK = TICK_SECONDS;
@@ -18,12 +20,12 @@ const WALK_SPEED = 0.022;
 const TRAVEL_SPEED = WALK_SPEED * 1.5;
 const MAX_MEMORIES = 40;
 const MAX_BONDS = 24;
-const MAX_EVENTS = 600;
+const MAX_EVENTS = 4000;
 /** Share of a sale that reaches the producer; the rest funds the community (builders' wages). */
 const PRODUCER_SHARE = 0.8;
 const BUILDER_WAGE = 0.6; // coins per hour
 /** Main resource produced by each profession (-1: none / varies). */
-const JOB_OUTPUT = [R.Food, R.Food, R.Food, R.Food, R.Wood, R.Stone, -1, R.Tools, R.Goods, -1];
+const JOB_OUTPUT = [R.Food, R.Food, R.Food, R.Food, R.Wood, R.Stone, -1, R.Tools, R.Goods, -1, -1, -1];
 
 interface SiteCache {
   depot: { e: number; n: number };
@@ -31,6 +33,7 @@ interface SiteCache {
   water: { e: number; n: number }[];
   forageCapacity: number;
   windmill: boolean;
+  temple: { e: number; n: number } | null;
 }
 
 /**
@@ -59,6 +62,7 @@ export class Simulation {
   private censusTick = -1;
   private censusData = new Map<number, { pop: number; adults: number }>();
   private causes = new Map<number, DeadPerson['cause']>();
+  private modsCache = new Map<number, Mods>();
   /** Bumped whenever the set of living people (or their jobs / homes) changes. */
   rosterVersion = 0;
   /** Bumped whenever a building is added or progresses. */
@@ -100,19 +104,22 @@ export class Simulation {
         stock[R.Stone] = 18;
         stock[R.Tools] = 3;
       }
-      return { id: s.id, stock, prices: [...BASE_PRICE], treasury: pop ? 250 : 0, forage: 1e9, harvest: 1, projects: [], hungryDays: 0 };
+      return { id: s.id, stock, prices: [...BASE_PRICE], treasury: pop ? 250 : 0, forage: 1e9, harvest: 1, projects: [], hungryDays: 0, civ: 0, founded: time };
     });
     const events: SimEvent[] = settlements.filter((st) => st.treasury > 0).map((st) => ({ t: time, type: 'founded' as const, settlement: st.id }));
     const state: SimState = {
       version: SIM_STATE_VERSION, time, tick: 0, rng: rng.fork('simulation').state, nextId: founders.nextId,
       persons: founders.persons, households: founders.households, dead: [],
-      buildings, settlements, events, nextBuildingId: buildings.length + 1, stride: 1,
+      buildings, settlements, events, civs: [], religions: [], nextBuildingId: buildings.length + 1, stride: 1,
     };
     const sim = new Simulation(sites, state);
     for (const st of settlements) {
       st.forage = sim.forageCapacity(st.id);
       updatePrices(sim, st);
+      // each founding community is a people of its own, with its first chief
+      if (st.treasury > 0) foundCivilization(sim, st);
     }
+    state.rng = sim.rng.state;
     return sim;
   }
 
@@ -128,6 +135,22 @@ export class Simulation {
   settlement(id: number): SettlementState | undefined { return this.settlements.get(id); }
   nameOf(p: { firstName: string; lastName: string }): string { return `${p.firstName} ${p.lastName}`; }
   forageCapacity(site: number): number { return this.cache.get(site)?.forageCapacity ?? 0; }
+  /** Civilisation a settlement belongs to. */
+  civOf(settlement: number): Civilization | undefined {
+    const id = this.settlements.get(settlement)?.civ;
+    return id ? this.state.civs[id - 1] : undefined;
+  }
+  /** What a civilisation's technologies change in practice. */
+  modsOf(civ: Civilization): Mods {
+    let m = this.modsCache.get(civ.id);
+    if (!m) this.modsCache.set(civ.id, (m = modsFor(civ.techs)));
+    return m;
+  }
+  mods(settlement: number): Mods {
+    const civ = this.civOf(settlement);
+    return civ ? this.modsOf(civ) : BASE_MODS;
+  }
+  modsChanged(): void { this.modsCache.clear(); }
 
   householdOfBuilding(building: number): Household | undefined {
     for (const h of this.state.households) if (h.building === building) return h;
@@ -193,7 +216,8 @@ export class Simulation {
     let forage = 0;
     for (let k = 0; k < base.forage.length; k++) forage += base.forage[k];
     // What the wild can feed each day: enough for a hamlet, never for a town.
-    this.cache.set(id, { depot, plaza, water, forageCapacity: forage / 255 / 100, windmill: !!done('windmill') });
+    const temple = done('temple');
+    this.cache.set(id, { depot, plaza, water, forageCapacity: forage / 255 / 100, windmill: !!done('windmill'), temple: temple ? snap(this.doorOf(temple)) : null });
     for (const h of this.state.households) {
       if (h.settlement !== id) continue;
       const b = this.buildings.get(h.building);
@@ -291,13 +315,17 @@ export class Simulation {
         died = true;
         continue;
       }
+      if (p.trip) {
+        this.travel(p);
+        continue;
+      }
       if (ageAt(p, s.time) < 4) {
         this.infant(p);
         continue;
       }
       if (p.phase === Phase.Do) {
-        if (p.activity === Activity.Trading) {
-          this.travel(p);
+        if (p.activity === Activity.Trading || p.activity === Activity.Migrating) {
+          this.decide(p, site); // journey over
         } else if (p.activity === Activity.Sleeping) {
           // people sleep through the night and rise with the day
           const h = localHour(s.time, site.longitude);
@@ -315,7 +343,7 @@ export class Simulation {
   }
 
   private critical(p: Person): boolean {
-    if (p.activity === Activity.Eating || p.activity === Activity.Drinking || p.activity === Activity.Trading) return false;
+    if (p.activity === Activity.Eating || p.activity === Activity.Drinking || p.trip) return false;
     return p.needs[N.Water] < 0.12 || (p.needs[N.Food] < 0.12 && p.activity !== Activity.Foraging && p.activity !== Activity.Shopping);
   }
 
@@ -444,13 +472,14 @@ export class Simulation {
       case Activity.Wandering: this.begin(p, Activity.Wandering, Phase.Do, (8 + rng.next() * 10) * 60); break;
       case Activity.Playing: this.begin(p, Activity.Playing, Phase.Do, (15 + rng.next() * 20) * 60); break;
       case Activity.Working: {
-        const indoors = p.job === J.Smith || p.job === J.Artisan || p.job === J.Miner;
+        const indoors = p.job === J.Smith || p.job === J.Artisan || p.job === J.Miner || p.job === J.Researcher || p.job === J.Leader;
         p.inside = indoors;
         this.begin(p, Activity.Working, Phase.Do, (2.7 + rng.next() * 0.6) * HOUR);
         break;
       }
       case Activity.Building: this.begin(p, Activity.Building, Phase.Do, (2.7 + rng.next() * 0.6) * HOUR); break;
       case Activity.Shopping: this.begin(p, Activity.Shopping, Phase.Do, 10 * 60); break;
+      case Activity.Praying: p.inside = true; this.begin(p, Activity.Praying, Phase.Do, (30 + rng.next() * 25) * 60); break;
       case Activity.Trading: this.depart(p, site); break;
       case Activity.Socializing: {
         const other = this.byId.get(p.partner);
@@ -518,7 +547,7 @@ export class Simulation {
         const cap = this.forageCapacity(site.id);
         // the wild only gives so much: over-gathered land yields less
         const abundance = Math.max(0.15, Math.min(1, st.forage / (cap * 0.5 + 1e-6)));
-        const got = (0.8 + 2.8 * q * (0.5 + p.skills[J.Gatherer])) * (0.85 + 0.3 * rng.next()) * this.seasonFactor(site) * abundance;
+        const got = (0.8 + 2.8 * q * (0.5 + p.skills[J.Gatherer])) * (0.85 + 0.3 * rng.next()) * this.seasonFactor(site) * abundance * this.mods(site.id).forage;
         st.forage = Math.max(0, st.forage - got);
         p.carry = got;
         p.carryRes = R.Food;
@@ -594,6 +623,13 @@ export class Simulation {
         }
         break;
       }
+      case Activity.Praying: {
+        p.needs[N.Social] = Math.min(1, p.needs[N.Social] + 0.25);
+        p.needs[N.Safety] = Math.min(1, p.needs[N.Safety] + 0.3);
+        const rel = this.state.religions[p.faith - 1];
+        if (rel) rel.fervor = Math.min(1, rel.fervor + 0.0015);
+        break;
+      }
       case Activity.Socializing: {
         const other = this.byId.get(Math.abs(p.partner));
         if (other && p.partner !== 0) {
@@ -631,8 +667,9 @@ export class Simulation {
   /** Tools make every trade more productive; each shift wears them a little. */
   private toolBonus(st: SettlementState): number {
     if (st.stock[R.Tools] < 0.5) return 1;
-    st.stock[R.Tools] = Math.max(0, st.stock[R.Tools] - 0.004);
-    return 1.35;
+    const m = this.mods(st.id);
+    st.stock[R.Tools] = Math.max(0, st.stock[R.Tools] - 0.004 * m.toolWear);
+    return m.tools;
   }
 
   /** Output of one work shift, according to the profession and the real land. */
@@ -641,20 +678,43 @@ export class Simulation {
     const vary = 0.85 + 0.3 * this.rng.next();
     const b = this.buildings.get(p.workplace);
     const credit = (qty: number) => { if (b) b.produced += qty; return qty; };
+    const m = this.mods(st.id);
+    const hh = this.households.get(p.household)!;
+    const stipend = (coins: number) => {
+      const paid = Math.min(Math.max(0, st.treasury), coins);
+      st.treasury -= paid;
+      hh.coins += paid;
+    };
     switch (p.job) {
+      case J.Researcher: {
+        // study, observation, trial and error: knowledge accumulates for the whole people
+        const civ = this.civOf(st.id);
+        if (civ) addResearch(this, civ, 0.045 * skill * (0.6 + p.traits[T.Intelligence]) * m.research, p);
+        p.skills[J.Researcher] = Math.min(1, p.skills[J.Researcher] + 0.004 * (0.5 + p.traits[T.Intelligence]));
+        stipend(1.5);
+        return null;
+      }
+      case J.Leader: {
+        // holding council, settling disputes: a present ruler is a respected one
+        const civ = this.civOf(st.id);
+        if (civ && civ.leader === p.id) civ.legitimacy = Math.min(1, civ.legitimacy + 0.0006 * (0.5 + p.traits[T.Sociability]));
+        p.skills[J.Leader] = Math.min(1, p.skills[J.Leader] + 0.003 * (0.5 + p.traits[T.Intelligence]));
+        stipend(2);
+        return null;
+      }
       case J.Farmer: {
         if (!b) return null;
         const c = cellOf(site, b.e, b.n);
         const soil = c >= 0 ? site.fertility[c] / 255 : 0.4;
         const mill = this.cache.get(site.id)?.windmill ? 1.15 : 1;
-        return { res: R.Food, qty: credit(4.2 * soil * this.seasonFactor(site) * st.harvest * skill * vary * mill * this.toolBonus(st)) };
+        return { res: R.Food, qty: credit(4.2 * soil * this.seasonFactor(site) * st.harvest * skill * vary * mill * this.toolBonus(st) * m.farm * m.haul) };
       }
       case J.Herder: return b ? { res: R.Food, qty: credit(2.5 * skill * vary * (0.7 + 0.3 * this.seasonFactor(site))) } : null;
-      case J.Fisher: return b ? { res: R.Food, qty: credit(2.9 * skill * vary) } : null;
+      case J.Fisher: return b ? { res: R.Food, qty: credit(2.9 * skill * vary * m.fish) } : null;
       case J.Woodcutter: {
         const c = cellOf(site, p.e, p.n);
         const density = c >= 0 ? site.wood[c] / 255 : 0.3;
-        return { res: R.Wood, qty: 2.6 * (0.4 + 0.6 * density) * skill * vary * this.toolBonus(st) };
+        return { res: R.Wood, qty: 2.6 * (0.4 + 0.6 * density) * skill * vary * this.toolBonus(st) * m.haul };
       }
       case J.Miner: {
         // no mine: loose stone picked up along banks and slopes
@@ -663,7 +723,7 @@ export class Simulation {
         const c = cellOf(site, b.e, b.n);
         const rich = c >= 0 ? (site.mineral[c] & 15) / 15 : 0.3;
         const base = b.res === R.Stone ? 2.6 : b.res === R.Gold ? 0.25 : 1.4;
-        return { res: b.res, qty: credit(base * (0.4 + 0.6 * rich) * skill * vary * this.toolBonus(st)) };
+        return { res: b.res, qty: credit(base * (0.4 + 0.6 * rich) * skill * vary * this.toolBonus(st) * m.mine * m.haul) };
       }
       case J.Smith: {
         // iron + fuel -> tools; nothing can be forged without iron
@@ -688,14 +748,17 @@ export class Simulation {
   /** A merchant loads surplus goods and sets off for the neighbour that pays best. */
   private planTrade(p: Person, site: SimSite, st: SettlementState): { to: number; res: number; qty: number } | null {
     const targets = stockTargets(this, st);
+    const m = this.mods(st.id);
+    const port = countKind(this.buildingsOf(st.id), 'dock') > 0;
     let best: { to: number; res: number; qty: number; gain: number } | null = null;
     for (const nb of site.neighbors) {
       const other = this.settlements.get(nb.id);
       if (!other || this.census(nb.id).pop === 0) continue;
+      if (nb.overSea && !(m.sailing && port)) continue; // the sea is crossed only by those who can sail
       for (let r = 0; r < RESOURCE_COUNT; r++) {
         const surplus = st.stock[r] - targets[r];
         if (surplus < 2) continue;
-        const qty = Math.min(8, surplus);
+        const qty = Math.min(m.cargo, surplus);
         const gain = (other.prices[r] - st.prices[r]) * qty;
         if (other.prices[r] > st.prices[r] * 1.15 && (!best || gain > best.gain)) best = { to: nb.id, res: r, qty, gain };
       }
@@ -732,10 +795,18 @@ export class Simulation {
       return;
     }
     const f = clamp01((t - trip.depart) / Math.max(1, trip.arrive - trip.depart));
-    const k = trip.stage === 1 ? f : 1 - f;
+    const k = trip.stage === 2 ? 1 - f : f;
     p.e = trip.fromE + (trip.toE - trip.fromE) * k;
     p.n = trip.fromN + (trip.toN - trip.fromN) * k;
     if (t < trip.arrive) return;
+    if (trip.stage === 3) {
+      // colonists reach their new land
+      p.e = trip.toE;
+      p.n = trip.toN;
+      p.trip = null;
+      this.decide(p, site);
+      return;
+    }
     const home = this.settlements.get(p.settlement)!;
     const hh = this.households.get(p.household)!;
     if (trip.stage === 1) {
@@ -783,6 +854,7 @@ export class Simulation {
     const due = Math.min(purse, trip.owed);
     home.treasury += due;
     hh.coins += purse - due;
+    contact(this, p.settlement, trip.to);
     p.skills[J.Merchant] = Math.min(1, p.skills[J.Merchant] + 0.02 * (0.5 + p.traits[T.Intelligence]));
     p.counts.shifts++;
     p.trip = null;
@@ -900,6 +972,10 @@ export class Simulation {
     if (!child || age >= 8) {
       add(Activity.Wandering, night ? 0 : (0.06 + 0.55 * tr[T.Curiosity] * Math.min(nd[N.Food], nd[N.Water], nd[N.Sleep])) * (0.6 + 0.6 * tr[T.Courage]));
     }
+    if (p.faith && age >= 10 && this.cache.get(site.id)?.temple) {
+      const fervor = this.state.religions[p.faith - 1]?.fervor ?? 0.5;
+      add(Activity.Praying, night ? 0 : (1 - nd[N.Social]) * 0.25 + (1 - nd[N.Safety]) * 0.5 + fervor * 0.14);
+    }
     add(Activity.Resting, 0.06 + (1 - nd[N.Safety]) * (0.4 + 0.8 * tr[T.Prudence]) + (1 - nd[N.Shelter]) * 0.5 + (night ? 0.25 : 0));
     return out;
   }
@@ -953,6 +1029,8 @@ export class Simulation {
       }
       case Activity.Shopping:
         return go(cache.depot.e + rng.range(-1.5, 1.5), cache.depot.n + rng.range(-1.5, 1.5));
+      case Activity.Praying:
+        return cache.temple ? go(cache.temple.e + rng.range(-1, 1), cache.temple.n + rng.range(-1, 1)) : false;
       case Activity.Foraging: {
         const reach = 90 + 110 * p.traits[T.Courage];
         let best: { e: number; n: number; q: number } | null = null;
@@ -992,6 +1070,7 @@ export class Simulation {
           const w = cache.water[cache.water.length - 1];
           return w ? go(w.e + rng.range(-3, 3), w.n + rng.range(-3, 3)) : false;
         }
+        if ((p.job === J.Researcher || p.job === J.Leader) && (!b || b.progress < 1)) return go(cache.plaza.e + rng.range(-3, 3), cache.plaza.n + rng.range(-3, 3));
         if (!b || b.progress < 1) return false;
         if (p.job === J.Smith && (st.stock[R.Iron] < 1 || (st.stock[R.Coal] < 1 && st.stock[R.Wood] < 2))) return false;
         if (p.job === J.Artisan && st.stock[R.Wood] < 1.5) return false;
@@ -1087,6 +1166,9 @@ export class Simulation {
     child.look.skin = father && rng.chance(0.5) ? father.look.skin : mother.look.skin;
     child.look.hair = father && rng.chance(0.5) ? father.look.hair : mother.look.hair;
     child.parents = [mother.id, father?.id ?? 0];
+    child.faith = mother.faith || father?.faith || 0;
+    const civ = this.civOf(mother.settlement);
+    if (civ) child.look.tunic = (civ.color * 3 + (child.id % 4)) % 10;
     child.needs = [1, 1, 1, 1, 1, 1];
     child.inside = true;
     const door = this.home(mother);
@@ -1152,6 +1234,7 @@ export class Simulation {
     }
     this.censusTick = -1;
     this.rosterVersion++;
+    for (const p of gone) onDeath(this, p);
   }
 
   /** Children left without any adult join the household of a relative, or the roomiest one. */
@@ -1205,6 +1288,7 @@ export class Simulation {
       alive: s.persons.length, deaths: s.dead.length, households: s.households.length, byActivity, byJob,
       avgNeeds: avgNeeds.map((v) => v / n), avgHealth: health / n, pantryMeals: pantry, inhabitedSettlements: inhabited.size,
       births: this.bornSinceFounding(),
+      civilizations: s.civs.reduce((a, c) => a + (c.fallen ? 0 : 1), 0),
     };
   }
 
@@ -1261,10 +1345,113 @@ export class Simulation {
           if (c.goods * left > st.stock[R.Goods] + 0.5) missing.push(R.Goods);
           return { id, kind: b.kind, progress: b.progress, missing };
         }),
-        buildings: countKindAll(list), housing,
+        buildings: countKindAll(list), housing, civ: st.civ,
       };
     });
     return { settlements, events: s.events.slice(-60) };
+  }
+
+  /**
+   * A few households leave to settle empty land: they travel physically to the
+   * new place, which joins their civilisation, and take provisions with them.
+   */
+  migrate(party: Household[], from: SettlementState, target: number): void {
+    const s = this.state;
+    const t = s.time;
+    const to = this.settlements.get(target)!;
+    const site = this.sites.get(target)!;
+    const back = site.neighbors.find((n) => n.id === from.id);
+    if (!back) return;
+    const heads = party.reduce((a, h) => a + h.members.length, 0);
+    const popFrom = Math.max(1, this.census(from.id).pop);
+    to.civ = from.civ;
+    to.founded = t;
+    const take = (r: number, amount: number) => {
+      const q = Math.min(from.stock[r] * 0.5, amount);
+      from.stock[r] -= q;
+      to.stock[r] += q;
+    };
+    take(R.Food, heads * 6);
+    take(R.Wood, 30);
+    take(R.Stone, 10);
+    take(R.Tools, 1);
+    const purse = from.treasury * (heads / popFrom) * 0.5;
+    from.treasury -= purse;
+    to.treasury += purse;
+    const vacant = this.buildingsOf(target).filter((b) => b.progress >= 1 && dwellingCapacity(b.kind) > 0 && !this.householdOfBuilding(b.id))
+      .sort((a, b) => dwellingCapacity(b.kind) - dwellingCapacity(a.kind) || a.id - b.id);
+    const duration = back.distance / TRAVEL_SPEED;
+    const names: string[] = [];
+    for (const hh of party) {
+      hh.settlement = target;
+      hh.building = vacant.shift()?.id ?? 0; // no roof yet: they will camp and build
+      for (const id of hh.members) {
+        const p = this.byId.get(id)!;
+        if (p.partner > 0) { const o = this.byId.get(p.partner); if (o && o.partner === -p.id) o.partner = 0; }
+        p.partner = 0;
+        p.settlement = target;
+        p.job = J.Gatherer;
+        p.workplace = 0;
+        p.carry = 0;
+        p.path = [];
+        p.inside = false;
+        const a = this.rng.next() * Math.PI * 2, r = 3 + this.rng.next() * 8;
+        p.trip = { to: target, stage: 3, depart: t, arrive: t + duration, fromE: back.e, fromN: back.n, toE: Math.cos(a) * r, toN: Math.sin(a) * r, res: 0, qty: 0, owed: 0, earned: 0 };
+        p.e = back.e;
+        p.n = back.n;
+        this.begin(p, Activity.Migrating, Phase.Do, duration);
+        if (ageAt(p, t) >= 12) this.remember(p, { t, type: 'colonist', place: site.name });
+        if (isAdult(p, t) && names.length < 3) names.push(this.nameOf(p));
+      }
+    }
+    this.censusTick = -1;
+    this.refreshSite(target);
+    this.rosterVersion++;
+    this.record({ t, type: 'colony', settlement: target, b: from.id, civ: from.civ, value: heads, names });
+  }
+
+  /** Political, cultural and religious picture of the world. */
+  worldView(): WorldView {
+    const s = this.state;
+    const settlements: WorldView['settlements'] = {};
+    for (const st of s.settlements) settlements[st.id] = [st.civ, this.census(st.id).pop];
+    const faith = new Map<number, number>();
+    for (const p of s.persons) if (p.faith) faith.set(p.faith, (faith.get(p.faith) ?? 0) + 1);
+    return {
+      civs: s.civs.map((c) => {
+        const own = s.settlements.filter((st) => st.civ === c.id).map((st) => st.id);
+        const followers: Record<number, number> = {};
+        let population = 0;
+        for (const p of s.persons) {
+          if (!own.includes(p.settlement)) continue;
+          population++;
+          if (p.faith) followers[p.faith] = (followers[p.faith] ?? 0) + 1;
+        }
+        const leader = this.byId.get(c.leader);
+        return { ...c, population, settlements: own, leaderName: leader ? this.nameOf(leader) : '', followers };
+      }),
+      religions: s.religions.map((r) => ({ ...r, followers: faith.get(r.id) ?? 0 })),
+      settlements,
+      events: s.events.slice(-500),
+    };
+  }
+
+  /** Finds people, living or dead, whose name contains the query (archives). */
+  search(query: string, limit = 40): SearchHit[] {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const out: SearchHit[] = [];
+    for (const p of this.state.persons) {
+      if (out.length >= limit) break;
+      const name = this.nameOf(p);
+      if (name.toLowerCase().includes(q)) out.push({ id: p.id, name, alive: true, birth: p.birth, death: 0, settlement: p.settlement });
+    }
+    for (let i = this.state.dead.length - 1; i >= 0 && out.length < limit; i--) {
+      const d = this.state.dead[i];
+      const name = this.nameOf(d);
+      if (name.toLowerCase().includes(q)) out.push({ id: d.id, name, alive: false, birth: d.birth, death: d.death, settlement: d.settlement });
+    }
+    return out;
   }
 
   /** Full sheet of a living or dead person, with the names of everyone it mentions. */
@@ -1326,6 +1513,8 @@ export class Simulation {
     for (const hh of this.state.households) { mix(Math.round(hh.food * 1000)); mix(Math.round(hh.coins * 1000)); }
     for (const st of this.state.settlements) { for (const v of st.stock) mix(Math.round(v * 1000)); mix(Math.round(st.treasury * 1000)); }
     for (const b of this.state.buildings) mix(Math.round(b.progress * 1e5) + b.id);
+    for (const c of this.state.civs) { mix(c.leader); mix(c.techs.length); mix(Math.round(c.legitimacy * 1e6)); mix(Math.round(c.research.progress * 1000)); }
+    for (const p of this.state.persons) mix(p.faith * 7 + p.settlement);
     mix(this.state.tick);
     mix(this.rng.state);
     return h >>> 0;

@@ -1,5 +1,6 @@
 import { clamp01 } from '../core/math';
 import { DAYS_PER_YEAR, SECONDS_PER_DAY, SECONDS_PER_YEAR } from './clock';
+import { civilizationsDaily } from './civilization';
 import { cellOf } from './pathfinding';
 import { dwellingCapacity } from './sites';
 import type { Simulation } from './simulation';
@@ -43,6 +44,8 @@ const JOB_TRAITS: number[][] = [
   /* smith      */ [0.2, 0, 0.5, 0, 0, 0, 0, 0, 0],
   /* artisan    */ [0, 0, 0.4, 0.3, 0, 0, 0, 0, 0],
   /* merchant   */ [0.5, 0, 0, 0, 0, 0, 0.5, 0, 0],
+  /* researcher */ [0, 0, 0.6, 0.5, 0, 0, 0, 0, 0],
+  /* leader     */ [0.5, 0, 0.2, 0, 0, 0, 0.4, 0, 0],
 ];
 
 export const ageAt = (p: Person, time: number) => (time - p.birth) / SECONDS_PER_YEAR;
@@ -117,6 +120,10 @@ export function jobSlots(sim: Simulation, st: SettlementState): number[] {
   slots[J.Woodcutter] = st.stock[R.Wood] < t[R.Wood] ? Math.min(6, Math.max(1, Math.ceil(adults * 0.15))) : st.stock[R.Wood] < t[R.Wood] * 1.6 ? 1 : 0;
   const partners = site.neighbors.filter((n) => sim.census(n.id).pop > 0).length;
   slots[J.Merchant] = countKind(list, 'market') > 0 && partners > 0 ? Math.min(2, Math.ceil(adults / 40)) : 0;
+  // scholars gather where there is a temple or a great house; a learned culture keeps more of them
+  const civ = sim.civOf(st.id);
+  const school = countKind(list, 'temple') + countKind(list, 'longhouse') > 0;
+  slots[J.Researcher] = !civ ? 0 : school ? Math.max(1, Math.ceil(adults * 0.04 * (0.5 + civ.culture.values[3] * 1.5))) : adults >= 18 ? 1 : 0;
   return slots;
 }
 
@@ -130,6 +137,7 @@ function jobUrgency(st: SettlementState, job: number): number {
     case J.Smith: return ratio(R.Tools);
     case J.Artisan: return ratio(R.Goods) * 0.8;
     case J.Merchant: return 1;
+    case J.Researcher: return 0.9;
     default: return 0;
   }
 }
@@ -146,7 +154,10 @@ export function assignJobs(sim: Simulation, st: SettlementState): void {
   const slots = jobSlots(sim, st);
   const people = sim.state.persons.filter((p) => p.settlement === st.id);
   const pool: Person[] = [];
+  const ruler = sim.civOf(st.id)?.leader ?? 0;
   for (const p of people) {
+    if (p.id === ruler) continue; // the ruler rules
+    if (p.job === J.Leader) p.job = J.Gatherer; // a former ruler returns to common life
     if (!isAdult(p, time)) {
       if (p.job !== J.Gatherer) setJob(sim, p, J.Gatherer, 0);
       continue;
@@ -163,7 +174,7 @@ export function assignJobs(sim: Simulation, st: SettlementState): void {
   // Never strip the land of all its gatherers while the granary is low.
   const foodDays = st.stock[R.Food] / Math.max(1, people.length);
   let reserve = foodDays < 1.5 ? Math.ceil(pool.length * 0.5) : foodDays < 3 ? Math.ceil(pool.length * 0.25) : 0;
-  const order = [J.Farmer, J.Herder, J.Fisher, J.Woodcutter, J.Miner, J.Builder, J.Smith, J.Artisan, J.Merchant]
+  const order = [J.Farmer, J.Herder, J.Fisher, J.Woodcutter, J.Miner, J.Builder, J.Smith, J.Artisan, J.Merchant, J.Researcher]
     .sort((a, b) => jobUrgency(st, b) - jobUrgency(st, a) || a - b);
   for (const job of order) {
     const foodJob = job === J.Farmer || job === J.Herder || job === J.Fisher;
@@ -189,6 +200,10 @@ function workplaceOk(sim: Simulation, p: Person): boolean {
 }
 
 function pickWorkplace(sim: Simulation, st: SettlementState, job: number): number {
+  if (job === J.Researcher) {
+    const list = sim.buildingsOf(st.id);
+    return (list.find((b) => b.kind === 'temple' && b.progress >= 1) ?? list.find((b) => b.kind === 'longhouse' && b.progress >= 1))?.id ?? 0;
+  }
   const kind = job === J.Miner ? 'mine' : BOUND[job];
   if (!kind) return 0;
   const counts = new Map<number, number>();
@@ -359,7 +374,7 @@ export function planConstruction(sim: Simulation, st: SettlementState): void {
 /** A builder's shift: turns stocked materials and hours of work into progress. Returns hours actually used. */
 export function workOnProject(sim: Simulation, st: SettlementState, b: SimBuilding, hours: number, builder: Person): number {
   const cost = BUILD_COST[b.kind] ?? BUILD_COST.house;
-  let dp = Math.min(1 - b.progress, hours / cost.hours);
+  let dp = Math.min(1 - b.progress, hours / (cost.hours * sim.mods(st.id).buildHours));
   const need = [[R.Wood, cost.wood], [R.Stone, cost.stone], [R.Goods, cost.goods]] as const;
   let f = 1;
   for (const [r, amount] of need) if (amount > 0) f = Math.min(f, st.stock[r] / (amount * dp + 1e-9));
@@ -531,7 +546,7 @@ export function lifeCycle(sim: Simulation, st: SettlementState): void {
   for (const p of people) {
     const age = ageAt(p, time);
     if (age < 55 || p.trip) continue;
-    if (rng.next() < 0.00004 * Math.exp((age - 55) / 7)) sim.kill(p, 'age');
+    if (rng.next() < 0.00004 * Math.exp((age - 55) / 7) * sim.mods(st.id).mortality) sim.kill(p, 'age');
   }
 }
 
@@ -545,7 +560,7 @@ export function dailyUpdate(sim: Simulation): void {
     const cap = sim.forageCapacity(st.id);
     st.forage = Math.min(cap, st.forage + cap * 0.5);
     if (pop === 0) continue;
-    st.stock[R.Food] *= 0.985; // granary losses: food does not keep forever
+    st.stock[R.Food] *= 1 - sim.mods(st.id).spoilage; // granary losses: food does not keep forever
     // an idle, overflowing common purse is shared out again among the households
     const reserve = 150 + pop * 2;
     if (st.treasury > reserve && !st.projects.length) {
@@ -562,7 +577,7 @@ export function dailyUpdate(sim: Simulation): void {
       st.treasury += due;
     }
     if (newYear) {
-      st.harvest = 0.55 + sim.rng.next() * 0.75;
+      st.harvest = Math.max(sim.mods(st.id).harvestFloor, 0.55 + sim.rng.next() * 0.75);
       if (st.harvest < 0.72 || st.harvest > 1.18) sim.record({ t: s.time, type: 'harvest', settlement: st.id, value: st.harvest });
     }
     // famine: the granary and the pantries are empty for days
@@ -577,4 +592,5 @@ export function dailyUpdate(sim: Simulation): void {
     assignJobs(sim, st);
     planConstruction(sim, st);
   }
+  civilizationsDaily(sim);
 }
