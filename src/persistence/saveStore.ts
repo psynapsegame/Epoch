@@ -1,4 +1,5 @@
 import type { CameraState } from '../render/cameraController';
+import { mirrorDelete, mirrorReadAll, mirrorWrite } from '../platform/platform';
 
 /**
  * Save games in IndexedDB. A world is fully determined by its seed, so a save
@@ -71,10 +72,38 @@ export function validateSave(data: unknown): SaveData {
 }
 
 export const saveStore = {
-  put: (save: SaveData) => tx('readwrite', (s) => s.put(save)).then(() => undefined),
+  /** Writes to IndexedDB and, in the native apps, to a durable file mirror. */
+  put: async (save: SaveData) => {
+    await tx('readwrite', (s) => s.put(save));
+    await mirrorWrite(save.slot, JSON.stringify(save)).catch((e) => console.warn('Save mirror failed', e));
+  },
   get: (slot: string) => tx<SaveData | undefined>('readonly', (s) => s.get(slot)).then((v) => (v ? validateSave(v) : undefined)),
   list: () => tx<SaveData[]>('readonly', (s) => s.getAll()),
-  remove: (slot: string) => tx('readwrite', (s) => s.delete(slot)).then(() => undefined),
+  remove: async (slot: string) => {
+    await tx('readwrite', (s) => s.delete(slot));
+    await mirrorDelete(slot).catch(() => {});
+  },
+  /**
+   * Native apps: if the WebView storage was evicted, restore saves from the file mirror
+   * (only slots missing from IndexedDB, never overwriting newer data).
+   */
+  recoverFromMirror: async (): Promise<number> => {
+    const raw = await mirrorReadAll();
+    if (!raw.length) return 0;
+    const existing = new Map((await tx<SaveData[]>('readonly', (s) => s.getAll())).map((s) => [s.slot, s]));
+    let restored = 0;
+    for (const text of raw) {
+      try {
+        const save = validateSave(JSON.parse(text));
+        const cur = existing.get(save.slot);
+        if (!cur || cur.savedAt < save.savedAt) {
+          await tx('readwrite', (s) => s.put(save));
+          restored++;
+        }
+      } catch { /* skip unreadable mirror file */ }
+    }
+    return restored;
+  },
 };
 
 export function exportSave(save: SaveData): string {

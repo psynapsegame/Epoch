@@ -6,10 +6,18 @@ import { TreeKind, TREE_KIND_COUNT, type TreeAssets } from './models/trees';
 
 const RES = 32; // quads per chunk edge
 const VERTS = (RES + 1) * (RES + 1);
-const MAX_LEVEL = 7;
 const TREE_LEVEL = 4;
-const SPLIT_FACTOR = 2.5;
-const TREE_GRID = 36; // candidate trees per chunk edge at TREE_LEVEL (~9 m spacing)
+
+/** Tunable level-of-detail settings (driven by the quality tier). */
+export interface TerrainOptions {
+  maxLevel: number;
+  /** A chunk splits when the camera is closer than size × splitFactor. */
+  splitFactor: number;
+  /** Candidate trees per chunk edge at TREE_LEVEL (36 ≈ one every 9 m). */
+  treeGrid: number;
+  /** Milliseconds per frame allowed for building chunks. */
+  budgetMs: number;
+}
 
 /** Cube faces: [normal, u axis, v axis] with u × v = normal (outward CCW winding). */
 const FACES: [number[], number[], number[]][] = [
@@ -95,7 +103,7 @@ export class PlanetTerrain {
   /** Circles (unit direction + radius in metres) kept free of trees, e.g. settlements. */
   private clearings: { dir: THREE.Vector3; radius: number }[] = [];
 
-  constructor(private world: World, private material: THREE.Material, private treeAssets: TreeAssets) {
+  constructor(private world: World, private material: THREE.Material, private treeAssets: TreeAssets, private opts: TerrainOptions) {
     this.seed = hashString(world.data.seed);
     for (let f = 0; f < 6; f++) {
       const root = new TerrainNode(f, 0, 0, 0, world);
@@ -109,7 +117,8 @@ export class PlanetTerrain {
   }
 
   /** Per-frame LOD selection. `budgetMs` bounds chunk construction time. */
-  update(camera: THREE.PerspectiveCamera, budgetMs = 5): void {
+  update(camera: THREE.PerspectiveCamera): void {
+    const budgetMs = this.opts.budgetMs;
     this.frame++;
     this.camPos.copy(camera.position);
     this.frustum.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
@@ -145,7 +154,7 @@ export class PlanetTerrain {
     this.sphere.center.copy(node.center);
     this.sphere.radius = node.boundRadius * 1.25;
     const inFrustum = this.frustum.intersectsSphere(this.sphere);
-    const wantSplit = node.level < MAX_LEVEL && !beyondHorizon && inFrustum && dist < node.size * SPLIT_FACTOR;
+    const wantSplit = node.level < this.opts.maxLevel && !beyondHorizon && inFrustum && dist < node.size * this.opts.splitFactor;
 
     if (wantSplit) {
       if (!node.children) {
@@ -278,6 +287,9 @@ export class PlanetTerrain {
   /** Deterministically scatters trees over a chunk according to the forest cover field. */
   private plantTrees(node: TerrainNode): void {
     const world = this.world, d = world.data;
+    const TREE_GRID = this.opts.treeGrid;
+    // Sparser forests keep their look with slightly larger trees.
+    const sizeBoost = Math.sqrt(36 / TREE_GRID);
     const n = 1 << node.level;
     const a0 = -1 + (2 * node.ix) / n, b0 = -1 + (2 * node.iy) / n, cell = 2 / n / TREE_GRID;
     const gx0 = node.ix * TREE_GRID, gy0 = node.iy * TREE_GRID;
@@ -308,7 +320,7 @@ export class PlanetTerrain {
         else if (b === Biome.Savanna) kind = TreeKind.Acacia;
         else if (t > 20) kind = h < 6 && d.oceanDist[c] < 6 ? TreeKind.Palm : r1 < 0.5 ? TreeKind.Jungle : TreeKind.Broadleaf;
         else kind = r1 < (t < 9 ? 0.55 : 0.14) ? TreeKind.Conifer : TreeKind.Broadleaf;
-        const scale = 0.75 + hash2(gx, gy, seed + 4) * 0.7;
+        const scale = (0.75 + hash2(gx, gy, seed + 4) * 0.7) * (0.6 + 0.4 * sizeBoost);
         lists[kind].push(dir.x, dir.y, dir.z, world.R + h - 0.15, scale, hash2(gx, gy, seed + 5));
       }
     }
@@ -346,6 +358,13 @@ export class PlanetTerrain {
       trees.push(inst);
     }
     node.trees = trees;
+  }
+
+  /** Applies new LOD settings; vegetation is replanted if its density changed. */
+  setOptions(opts: TerrainOptions): void {
+    const replant = opts.treeGrid !== this.opts.treeGrid;
+    this.opts = opts;
+    if (replant) this.refreshTrees();
   }
 
   /** Rebuilds all vegetation (after clearings changed). */

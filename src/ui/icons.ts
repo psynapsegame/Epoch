@@ -11,5 +11,6 @@ export const ICONS = {
   atlas: svg('<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14"/>'),
   chronicles: svg('<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM5 17a3 3 0 0 1 3-3h11M9 8h6M9 11h4"/>'),
   divinity: svg('<path d="M12 2l2.2 6.3L21 9l-5.2 4.2L17.5 20 12 16.2 6.5 20l1.7-6.8L3 9l6.8-.7z"/>'),
+  rotate: svg('<rect x="7" y="3" width="10" height="18" rx="2" opacity=".45"/><rect x="3" y="9" width="18" height="10" rx="2"/><path d="M19 5.5A7 7 0 0 0 14 3M19 5.5V3M19 5.5h-2.5"/>'),
   lock: svg('<rect x="6" y="11" width="12" height="9" rx="1.5"/><path d="M9 11V8a3 3 0 0 1 6 0v3"/>'),
 };

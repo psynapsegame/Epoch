@@ -9,6 +9,9 @@ import { worldChecksum } from './world/generator';
 import { DEFAULT_WORLD_WIDTH } from './world/types';
 import type { World } from './world/world';
 import { SAVE_VERSION, saveStore, type SaveData } from './persistence/saveStore';
+import { deviceInfo, initNativeShell, isNative, requestPersistentStorage } from './platform/platform';
+import { PROFILES, QUALITY_TIERS, QualityGovernor, defaultTier, targetFrameRate, type QualityTier } from './render/quality';
+import { loadSettings, storeSettings, type Settings } from './settings';
 
 /** Number of founding hamlets raised on the best sites in Phase 1. */
 const FOUNDING_HAMLETS = 6;
@@ -39,20 +42,86 @@ export class Game {
   private lastAutosave = 0;
   running = false;
   onTick: (() => void) | null = null;
+  /** Fired when the governor lowers the quality tier on its own. */
+  onQualityChange: ((tier: QualityTier, automatic: boolean) => void) | null = null;
+  readonly device = deviceInfo();
+  readonly settings: Settings = loadSettings();
+  readonly governor = new QualityGovernor(60);
+  tier: QualityTier;
+  /** Frames per second currently aimed for (pacing), for diagnostics. */
+  pacedFps = 60;
 
   constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas);
-    let last = performance.now();
+    this.tier = this.settings.quality === 'auto' ? defaultTier(this.device) : this.settings.quality;
+    this.engine.applyQuality(PROFILES[this.tier]);
+
+    let lastRender = performance.now();
     const loop = (now: number) => {
-      const dt = Math.min(0.1, (now - last) / 1000);
-      last = now;
-      this.frame(dt);
       requestAnimationFrame(loop);
+      // Nothing is drawn or simulated while the app is in the background.
+      if (document.hidden) {
+        lastRender = now;
+        return;
+      }
+      // Frame pacing: full rate while the player acts or the camera travels, reduced at rest.
+      const c = this.engine.controls;
+      const active = c.moving || now - c.lastInput < 2500 || this.engine.busy;
+      const fps = targetFrameRate({ active, eco: this.settings.eco });
+      this.pacedFps = fps;
+      const elapsed = now - lastRender;
+      if (elapsed < 1000 / fps - 3) return;
+      lastRender = now;
+      if (active) this.govern(now, elapsed, fps);
+      this.frame(Math.min(0.1, elapsed / 1000));
     };
     requestAnimationFrame(loop);
+
     const persist = () => void this.autosave();
+    const resume = () => this.governor.hold(performance.now(), 3000);
     window.addEventListener('beforeunload', persist);
-    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && persist());
+    window.addEventListener('pagehide', persist);
+    document.addEventListener('visibilitychange', () => (document.visibilityState === 'hidden' ? persist() : resume()));
+    void initNativeShell(persist, resume);
+    void requestPersistentStorage();
+    if (isNative) void saveStore.recoverFromMirror().catch(() => 0);
+  }
+
+  /** Adaptive quality: lower the resolution, then the tier, when frames take too long. */
+  private govern(now: number, frameMs: number, fps: number): void {
+    const g = this.governor;
+    if (g.targetFps !== fps) {
+      g.targetFps = fps;
+      g.hold(now, 500);
+    }
+    const auto = this.settings.quality === 'auto';
+    const index = QUALITY_TIERS.indexOf(this.tier);
+    const action = g.sample(now, frameMs, this.engine.busy || !this.world, auto && index > 0);
+    if (action === 'none') return;
+    if (action === 'tier-down') {
+      this.tier = QUALITY_TIERS[index - 1];
+      this.engine.applyQuality(PROFILES[this.tier]);
+      g.hold(now, 4000);
+      this.onQualityChange?.(this.tier, true);
+    }
+    this.engine.setResolutionScale(g.scale);
+  }
+
+  /** Player choice of graphics quality ('auto' = adaptive). */
+  setQuality(q: Settings['quality']): void {
+    this.settings.quality = q;
+    storeSettings(this.settings);
+    this.tier = q === 'auto' ? defaultTier(this.device) : q;
+    this.governor.reset();
+    this.governor.hold(performance.now(), 4000);
+    this.engine.applyQuality(PROFILES[this.tier]);
+    this.engine.setResolutionScale(1);
+    this.onQualityChange?.(this.tier, false);
+  }
+
+  setEco(eco: boolean): void {
+    this.settings.eco = eco;
+    storeSettings(this.settings);
   }
 
   private frame(dt: number): void {
@@ -71,6 +140,7 @@ export class Game {
     const data = await generateWorldAsync({ seed, width: DEFAULT_WORLD_WIDTH }, onProgress);
     this.worldSum = worldChecksum(data);
     this.world = this.engine.setWorld(data);
+    this.governor.hold(performance.now(), 6000);
     this.clock.time = 7 * 3600;
     this.clock.speedIndex = 1;
     this.foundHamlets();

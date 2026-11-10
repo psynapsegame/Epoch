@@ -11,6 +11,8 @@ import type { Building } from '../sim/settlements';
 import type { BuildingKind } from '../render/models/buildings';
 import type { AtlasMode } from '../render/worldTextures';
 import { exportSave, importSave, saveStore, type SaveData } from '../persistence/saveStore';
+import { shareTextFile } from '../platform/platform';
+import { PROFILES, QUALITY_TIERS, TIER_LABELS } from '../render/quality';
 import { Water } from '../world/types';
 import { ICONS } from './icons';
 
@@ -71,6 +73,7 @@ export class App {
   private tutorialState = { move: false, zoom: false, rotate: false, inspect: false, atlas: false };
   private camRef: { dir: THREE.Vector3; dist: number; heading: number } | null = null;
   private toastTimer = 0;
+  private touch: boolean;
 
   constructor(private game: Game) {
     this.topbar = el(`<div id="topbar" class="glass fade out">
@@ -84,24 +87,28 @@ export class App {
       <span class="sep"></span><span class="readout"></span><span class="sep"></span>
       <button data-a="perf" title="Diagnostic (F3)">Diagnostic</button><button data-a="help" title="Aide">Aide</button></div>`);
     this.perf = el(`<div id="perf" class="glass hidden"></div>`);
+    this.touch = game.device.mobile;
+    document.body.classList.toggle('touch', this.touch);
+    this.applyUiQuality();
+    const steps = this.touch
+      ? ['Glisser un doigt pour parcourir le monde', 'Pincer avec deux doigts : de l’orbite jusqu’au sol', 'Tourner deux doigts pour pivoter, les glisser ensemble vers le haut pour incliner', 'Toucher une terre ou un bâtiment pour l’examiner', 'Ouvrir l’Atlas pour lire les données du monde']
+      : ['Glisser avec le clic gauche pour parcourir le monde (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>)', 'Molette : de l’orbite jusqu’au niveau du sol', 'Clic droit glissé : pivoter et incliner (<kbd>Q</kbd><kbd>E</kbd>)', 'Cliquer sur une terre ou un bâtiment pour l’examiner', 'Ouvrir l’Atlas pour lire les données du monde'];
+    const keys = ['move', 'zoom', 'rotate', 'inspect', 'atlas'];
     this.tutorial = el(`<div id="tutorial" class="glass hidden"><h4 class="caps">Premiers pas <button>masquer</button></h4><ul>
-      <li data-k="move">Glisser avec le clic gauche pour parcourir le monde (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>)</li>
-      <li data-k="zoom">Molette : de l’orbite jusqu’au niveau du sol</li>
-      <li data-k="rotate">Clic droit glissé : pivoter et incliner (<kbd>Q</kbd><kbd>E</kbd>)</li>
-      <li data-k="inspect">Cliquer sur une terre ou un bâtiment pour l’examiner</li>
-      <li data-k="atlas">Ouvrir l’Atlas pour lire les données du monde</li></ul></div>`);
+      ${steps.map((t, i) => `<li data-k="${keys[i]}">${t}</li>`).join('')}</ul></div>`);
+    const rotate = el(`<div id="rotate"><div>${ICONS.rotate}<p>Tournez votre appareil<br>EPOCH se joue en mode paysage</p></div></div>`);
     this.intro = el(`<div id="intro" class="fade"><div class="inner">
       <h1 class="title">EPOCH</h1><div class="subtitle">The Living World</div><div class="rule"></div>
       <p class="quote">${QUOTE.map((q) => `<span>${q}</span>`).join('')}</p>
       <div class="form" style="opacity:0">
-        <div class="seed"><label for="seed">Graine</label><input id="seed" maxlength="32" spellcheck="false" autocomplete="off" /><button title="Graine aléatoire" data-a="dice">⚄</button></div>
+        <div class="seed"><label for="seed">Graine</label><input id="seed" maxlength="32" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" enterkeyhint="go" /><button title="Graine aléatoire" data-a="dice">⚄</button></div>
         <div class="btns"><button class="btn primary" data-a="create">Créer le monde</button><button class="btn hidden" data-a="resume">Reprendre</button></div>
         <div class="err"></div>
       </div>
       <div class="progress hidden"><div class="stage"></div><div class="track"><i></i></div></div>
     </div></div>`);
     this.toastEl = el(`<div id="toast" class="glass closed"></div>`);
-    this.root.append(this.topbar, this.nav, this.panel, this.inspector, this.viewbar, this.perf, this.tutorial, this.toastEl, this.intro);
+    this.root.append(this.topbar, this.nav, this.panel, this.inspector, this.viewbar, this.perf, this.tutorial, this.toastEl, this.intro, rotate);
 
     this.buildTopbar();
     this.buildNav();
@@ -112,6 +119,11 @@ export class App {
 
     game.engine.controls.onClick = (ev) => this.onWorldClick(ev);
     game.onTick = () => this.tick();
+    game.onQualityChange = (tier, automatic) => {
+      this.applyUiQuality();
+      if (automatic) this.toast(`Qualité graphique adaptée à l’appareil : ${TIER_LABELS[tier]}`);
+      if (this.section === 'world') void this.renderWorldPanel();
+    };
     window.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       if (e.code === 'F3') { e.preventDefault(); this.perf.classList.toggle('hidden'); }
@@ -122,12 +134,17 @@ export class App {
     });
   }
 
+  /** Panels drop their blur on tiers where it would cost too much GPU time. */
+  private applyUiQuality(): void {
+    document.body.classList.toggle('no-glass', !PROFILES[this.game.tier].glassUi);
+  }
+
   // ------------------------------------------------------------------ HUD
   private buildTopbar(): void {
     const stats = this.topbar.querySelector('#stats')!;
     const defs: [string, string, string?][] = [
       ['date', 'Année', 'date'], ['season', 'Saison'], ['hour', 'Heure locale', 'opt'], ['pop', 'Population'],
-      ['civ', 'Civilisations'], ['city', 'Villes'], ['war', 'Conflits'], ['temp', 'Température'],
+      ['civ', 'Civilisations'], ['city', 'Villes'], ['war', 'Conflits'], ['temp', 'Température', 'opt2'],
     ];
     for (const [id, label, cls] of defs) stats.append(el(`<div class="stat ${cls ?? ''}"><label>${label}</label><b data-s="${id}">—</b></div>`));
     const speeds = this.topbar.querySelector('#speeds')!;
@@ -141,9 +158,12 @@ export class App {
   private buildNav(): void {
     for (const s of SECTIONS) {
       const locked = s.phase > CURRENT_PHASE;
-      const b = el<HTMLButtonElement>(`<button class="${locked ? 'locked' : ''}" data-id="${s.id}" aria-label="${s.label}" ${locked ? 'aria-disabled="true"' : ''}>
+      const b = el<HTMLButtonElement>(`<button class="${locked ? 'locked' : ''}" data-id="${s.id}" aria-label="${s.label}${locked ? ` (phase ${s.phase})` : ''}">
         ${ICONS[s.id]}<span class="tip">${s.label}${locked ? `<i>— arrive en phase ${s.phase}</i>` : ''}</span></button>`);
-      if (!locked) b.addEventListener('click', () => this.openSection(this.section === s.id ? null : s.id));
+      b.addEventListener('click', () => {
+        if (locked) this.toast(`${s.label} — arrive en phase ${s.phase}`);
+        else this.openSection(this.section === s.id ? null : s.id);
+      });
       this.nav.append(b);
     }
   }
@@ -155,13 +175,15 @@ export class App {
       if (a === 'strategic') c.strategicView();
       if (a === 'immersive') c.immersiveView();
       if (a === 'perf') this.perf.classList.toggle('hidden');
-      if (a === 'help') {
-        this.tutorial.classList.toggle('hidden');
-        this.tutorial.querySelectorAll('li').forEach((li) => li.classList.remove('done'));
-        this.tutorialState = { move: false, zoom: false, rotate: false, inspect: false, atlas: false };
-        this.camRef = null;
-      }
+      if (a === 'help') this.toggleHelp();
     });
+  }
+
+  private toggleHelp(): void {
+    this.tutorial.classList.toggle('hidden');
+    this.tutorial.querySelectorAll('li').forEach((li) => li.classList.remove('done'));
+    this.tutorialState = { move: false, zoom: false, rotate: false, inspect: false, atlas: false };
+    this.camRef = null;
   }
 
   private tick(): void {
@@ -196,7 +218,7 @@ export class App {
 
     if (!this.perf.classList.contains('hidden')) {
       const p = g.engine.perf;
-      this.perf.innerHTML = `<b>DIAGNOSTIC</b><br>FPS ${fmt(p.fps)} · image ${fmt(p.frameMs, 1)} ms<br>Appels de dessin ${fmt(p.drawCalls)}<br>Triangles ${fmt(p.triangles)}<br>Parcelles de terrain ${p.chunks} / ${p.chunksTotal} (file ${p.queue})<br>Arbres affichés ${fmt(p.trees)}<br>Bâtiments ${fmt(p.buildings)}<br>Géométries ${p.geometries} · textures ${p.textures}<br>Individus simulés ${fmt(sum.population)}`;
+      this.perf.innerHTML = `<b>DIAGNOSTIC</b><br>FPS ${fmt(p.fps)} (cible ${g.pacedFps}) · image ${fmt(p.frameMs, 1)} ms<br>Qualité ${TIER_LABELS[g.tier]} · résolution ${fmt(g.governor.scale * 100)} %<br>Appels de dessin ${fmt(p.drawCalls)}<br>Triangles ${fmt(p.triangles)}<br>Parcelles de terrain ${p.chunks} / ${p.chunksTotal} (file ${p.queue})<br>Arbres affichés ${fmt(p.trees)}<br>Bâtiments ${fmt(p.buildings)}<br>Géométries ${p.geometries} · textures ${p.textures}<br>Individus simulés ${fmt(sum.population)}`;
     }
     this.trackTutorial();
   }
@@ -282,8 +304,11 @@ export class App {
       <h3>Sauvegardes</h3>
       <div class="list">${slotRow('auto', 'Automatique')}${slotRow('slot1', 'Emplacement I')}${slotRow('slot2', 'Emplacement II')}${slotRow('slot3', 'Emplacement III')}</div>
       <div class="btns" style="margin-top:10px"><button class="btn" data-a="export">Exporter</button><button class="btn" data-a="import">Importer</button><button class="btn" data-a="new">Nouveau monde</button></div>
-      <h3>Affichage</h3>
-      <div class="btns"><button class="btn" data-q="1">Qualité haute</button><button class="btn" data-q="0.7">Moyenne</button><button class="btn" data-q="0.5">Performance</button></div>`;
+      <h3>Affichage et énergie</h3>
+      <div class="btns">${(['auto', ...QUALITY_TIERS] as const).map((q) => `<button class="btn ${g.settings.quality === q ? 'primary' : ''}" data-q="${q}">${q === 'auto' ? 'Auto' : TIER_LABELS[q]}</button>`).join('')}</div>
+      <p class="note">Qualité active : ${TIER_LABELS[g.tier]}${g.settings.quality === 'auto' ? ' (adaptée automatiquement aux performances de l’appareil)' : ''}.</p>
+      <div class="btns" style="margin-top:8px"><button class="btn ${g.settings.eco ? 'primary' : ''}" data-a="eco">Économie d’énergie</button><button class="btn" data-a="perf">Diagnostic</button><button class="btn" data-a="help">Aide</button></div>
+      <p class="note">L’économie d’énergie limite l’affichage à 30 images par seconde (20 au repos) pour ménager la batterie et la température du téléphone.</p>`;
     body.querySelectorAll<HTMLElement>('[data-land]').forEach((b) => b.addEventListener('click', () => {
       const l = w.data.landmasses.find((x) => x.id === Number(b.dataset.land))!;
       const d = new THREE.Vector3();
@@ -308,14 +333,17 @@ export class App {
       const s = await saveStore.get(b.dataset.load!);
       if (s) void this.loadSave(s);
     }));
-    body.querySelectorAll<HTMLElement>('[data-q]').forEach((b) => b.addEventListener('click', () => g.engine.setQuality(Number(b.dataset.q))));
-    body.querySelector('[data-a="export"]')!.addEventListener('click', () => {
-      const blob = new Blob([exportSave(g.snapshot('export'))], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `epoch-${w.data.seed.replace(/[^\w-]+/g, '_')}-an${g.date.year}.json`;
-      a.click();
-      URL.revokeObjectURL(a.href);
+    body.querySelectorAll<HTMLElement>('[data-q]').forEach((b) => b.addEventListener('click', () => g.setQuality(b.dataset.q as typeof g.settings.quality)));
+    body.querySelector('[data-a="eco"]')!.addEventListener('click', () => { g.setEco(!g.settings.eco); void this.renderWorldPanel(); });
+    body.querySelector('[data-a="perf"]')!.addEventListener('click', () => this.perf.classList.toggle('hidden'));
+    body.querySelector('[data-a="help"]')!.addEventListener('click', () => { this.openSection(null); this.toggleHelp(); });
+    body.querySelector('[data-a="export"]')!.addEventListener('click', async () => {
+      const name = `epoch-${w.data.seed.replace(/[^\w-]+/g, '_')}-an${g.date.year}.json`;
+      try {
+        await shareTextFile(name, exportSave(g.snapshot('export')));
+      } catch (e) {
+        this.toast(`Export impossible : ${(e as Error).message}`);
+      }
     });
     body.querySelector('[data-a="import"]')!.addEventListener('click', () => {
       const input = document.createElement('input');
@@ -511,7 +539,7 @@ export class App {
     // restore the seed form for a later "new world"
     const form = this.intro.querySelector<HTMLElement>('.form')!;
     window.setTimeout(() => {
-      form.innerHTML = `<div class="seed"><label for="seed">Graine</label><input id="seed" maxlength="32" spellcheck="false" autocomplete="off" /><button title="Graine aléatoire" data-a="dice">⚄</button></div>
+      form.innerHTML = `<div class="seed"><label for="seed">Graine</label><input id="seed" maxlength="32" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" enterkeyhint="go" /><button title="Graine aléatoire" data-a="dice">⚄</button></div>
         <div class="btns"><button class="btn primary" data-a="create">Créer le monde</button><button class="btn hidden" data-a="resume">Reprendre</button></div><div class="err"></div>`;
       const input = form.querySelector<HTMLInputElement>('#seed')!;
       input.value = `${SEED_WORDS[Math.floor(Math.random() * SEED_WORDS.length)]}-${Math.floor(Math.random() * 9000 + 1000)}`;

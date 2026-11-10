@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, damp, lerp, smoothstep } from '../core/math';
 import type { World } from '../world/world';
+import { twoFingerDelta } from './gestures';
 
 const MIN_DIST = 7;
 const MAX_DIST = 15000;
@@ -16,8 +17,10 @@ export interface CameraState {
 /**
  * Planet camera: one continuous zoom from orbit (strategic view) down to
  * eye level (immersive view). The camera orbits a focus point on the surface.
- *  - left drag: grab & move the world        - right drag: rotate / tilt
- *  - wheel: zoom                              - WASD / arrows: travel, Q/E: turn
+ * Touch (primary):  one finger drag = travel · pinch = zoom · twist = rotate ·
+ *                   two fingers sliding up/down = tilt · tap = select
+ * Mouse / keyboard: left drag = travel · right drag = rotate / tilt · wheel = zoom ·
+ *                   WASD / arrows = travel · Q/E = turn
  */
 export class CameraController {
   /** Focus point direction (goal + smoothed). */
@@ -34,7 +37,12 @@ export class CameraController {
   enabled = true;
   private userTilt = false;
   private keys = new Set<string>();
-  private drag: { button: number; x: number; y: number } | null = null;
+  /** Active pointers (fingers or mouse buttons). */
+  private pointers = new Map<number, { x: number; y: number; button: number; touch: boolean; lastDy?: number }>();
+  /** True once a gesture used two fingers: its release must not count as a tap. */
+  private multiTouch = false;
+  /** performance.now() of the last user input, for frame pacing. */
+  lastInput = 0;
   private groundR = 0;
   private moved = 0;
   /** Called on a click that was not a drag. */
@@ -44,6 +52,8 @@ export class CameraController {
     dom.addEventListener('pointerdown', this.onDown);
     window.addEventListener('pointermove', this.onMove);
     window.addEventListener('pointerup', this.onUp);
+    window.addEventListener('pointercancel', this.onUp);
+    dom.style.touchAction = 'none';
     dom.addEventListener('wheel', this.onWheel, { passive: false });
     dom.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('keydown', (e) => {
@@ -73,20 +83,48 @@ export class CameraController {
 
   private onDown = (e: PointerEvent) => {
     if (!this.interactive) return;
-    this.drag = { button: e.button, x: e.clientX, y: e.clientY };
-    this.moved = 0;
-    this.dom.setPointerCapture(e.pointerId);
+    this.lastInput = performance.now();
+    if (this.pointers.size === 0) {
+      this.moved = 0;
+      this.multiTouch = false;
+    }
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: e.button, touch: e.pointerType !== 'mouse' });
+    if (this.pointers.size >= 2) this.multiTouch = true;
+    try { this.dom.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
   };
 
   private onMove = (e: PointerEvent) => {
-    if (!this.drag || !this.interactive) return;
-    const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
-    this.drag.x = e.clientX;
-    this.drag.y = e.clientY;
+    const p = this.pointers.get(e.pointerId);
+    if (!p || !this.interactive) return;
+    this.lastInput = performance.now();
+    const px = p.x, py = p.y;
+    const dx = e.clientX - px, dy = e.clientY - py;
     this.moved += Math.abs(dx) + Math.abs(dy);
-    if (this.drag.button === 0 && !e.shiftKey) {
+
+    if (this.pointers.size >= 2) {
+      // Two fingers: pinch = zoom, twist = rotate, parallel vertical slide = tilt.
+      let other: { x: number; y: number } | null = null;
+      for (const [id, q] of this.pointers) if (id !== e.pointerId) { other = q; break; }
+      p.x = e.clientX;
+      p.y = e.clientY;
+      if (!other) return;
+      // The other finger is treated as still for this event; its own events mirror this.
+      const g = twoFingerDelta({ x: px, y: py }, other, p, other);
+      if (g.zoomFactor !== 1) this.zoomBy(g.zoomFactor);
+      this.goalHeading += g.rotation;
+      if (Math.abs(dy) > Math.abs(dx) * 1.5 && this.sameVerticalTrend(e.pointerId, dy)) {
+        this.goalTilt = clamp(this.goalTilt - dy * 0.004, 0, this.maxTilt(this.goalDistance));
+        this.userTilt = true;
+      }
+      p.lastDy = dy;
+      return;
+    }
+
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (p.touch || (p.button === 0 && !e.shiftKey)) {
       const mPerPx = (2 * this.distance * Math.tan((this.camera.fov * Math.PI) / 360)) / this.dom.clientHeight;
-      this.pan(-dx * mPerPx, dy * mPerPx / Math.max(0.35, Math.cos(this.tilt)));
+      this.pan(-dx * mPerPx, (dy * mPerPx) / Math.max(0.35, Math.cos(this.tilt)));
     } else {
       this.goalHeading -= dx * 0.005;
       this.goalTilt = clamp(this.goalTilt - dy * 0.005, 0, this.maxTilt(this.goalDistance));
@@ -94,16 +132,31 @@ export class CameraController {
     }
   };
 
+  /** Both fingers recently moved in the same vertical direction (a tilt slide, not a pinch). */
+  private sameVerticalTrend(id: number, dy: number): boolean {
+    for (const [oid, q] of this.pointers) {
+      if (oid !== id) return (q.lastDy ?? 0) * dy > 0;
+    }
+    return false;
+  }
+
   private onUp = (e: PointerEvent) => {
-    if (this.drag && this.moved < 5 && this.drag.button === 0 && this.interactive) this.onClick?.(e);
-    this.drag = null;
+    const p = this.pointers.get(e.pointerId);
+    if (!p) return;
+    this.pointers.delete(e.pointerId);
+    this.lastInput = performance.now();
+    const slop = p.touch ? 14 : 5;
+    const isTap = e.type === 'pointerup' && !this.multiTouch && this.moved < slop && (p.touch || p.button === 0);
+    if (isTap && this.pointers.size === 0 && this.interactive) this.onClick?.(e);
   };
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     if (!this.interactive) return;
+    this.lastInput = performance.now();
     const delta = e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY;
-    this.zoomBy(Math.exp(clamp(delta, -400, 400) * 0.0016));
+    // ctrl+wheel is how trackpads report a pinch
+    this.zoomBy(Math.exp(clamp(delta, -400, 400) * (e.ctrlKey ? 0.01 : 0.0016)));
   };
 
   zoomBy(factor: number): void {
@@ -162,6 +215,18 @@ export class CameraController {
     this.goalTilt = 1.28;
   }
 
+  /** True while the camera has not yet settled on its goal (or a cinematic plays). */
+  get moving(): boolean {
+    return (
+      this.cinematic ||
+      this.pointers.size > 0 ||
+      Math.abs(Math.log(this.distance / this.goalDistance)) > 0.002 ||
+      this.dir.distanceToSquared(this.goalDir) > 1e-10 ||
+      Math.abs(this.heading - this.goalHeading) > 0.002 ||
+      Math.abs(this.tilt - Math.min(this.goalTilt, this.maxTilt(this.distance))) > 0.002
+    );
+  }
+
   get altitude(): number {
     return this.camera.position.length() - (this.world?.R ?? 3200);
   }
@@ -197,6 +262,7 @@ export class CameraController {
       if (k.has('KeyD') || k.has('ArrowRight')) r += 1;
       if (k.has('KeyA') || k.has('ArrowLeft')) r -= 1;
       if (f || r) this.pan(r * speed, f * speed);
+      if (k.size) this.lastInput = performance.now();
       if (k.has('KeyQ')) this.goalHeading += dt * 1.2;
       if (k.has('KeyE')) this.goalHeading -= dt * 1.2;
       if (k.has('KeyR')) this.zoomBy(Math.exp(-dt * 1.6));

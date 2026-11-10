@@ -7,6 +7,7 @@ export function createOcean(): THREE.Mesh {
   const geo = new THREE.IcosahedronGeometry(PLANET_RADIUS, 48);
   const mat = new THREE.ShaderMaterial({
     uniforms: { ...U },
+    defines: {},
     transparent: true,
     depthWrite: true,
     vertexShader: /* glsl */ `
@@ -23,11 +24,18 @@ export function createOcean(): THREE.Mesh {
       uniform float uCloudShift;
       uniform float uCloudCover;
       ${GLSL_COMMON}
+      #ifdef EPOCH_LOW
+      float swell(vec3 p, float t) {
+        return vnoise(p * 0.05 + vec3(t * 0.11, 0.0, t * 0.07)) * 0.65
+             + vnoise(p * 0.19 + vec3(-t * 0.23, t * 0.13, 0.0)) * 0.35;
+      }
+      #else
       float swell(vec3 p, float t) {
         return vnoise(p * 0.05 + vec3(t * 0.11, 0.0, t * 0.07)) * 0.6
              + vnoise(p * 0.19 + vec3(-t * 0.23, t * 0.13, 0.0)) * 0.3
              + vnoise(p * 0.7 + vec3(t * 0.5, 0.0, -t * 0.4)) * 0.1;
       }
+      #endif
       void main() {
         vec3 up = normalize(vWPos);
         vec2 uv = epochUV(up);

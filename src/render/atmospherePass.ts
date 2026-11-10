@@ -30,6 +30,7 @@ export class AtmospherePass extends Pass {
         uSunPower: { value: 18 },
         uEnabled: { value: 0 },
       },
+      defines: { ATMO_STEPS: 10, ATMO_LSTEPS: 4 },
       depthTest: false,
       depthWrite: false,
       vertexShader: /* glsl */ `
@@ -50,8 +51,8 @@ export class AtmospherePass extends Pass {
         const float HM = 55.0;
         const vec3 BR = vec3(1.9e-4, 4.4e-4, 10.6e-4);
         const float BM = 1.6e-4;
-        const int STEPS = 10;
-        const int LSTEPS = 4;
+        const int STEPS = ATMO_STEPS;
+        const int LSTEPS = ATMO_LSTEPS;
 
         vec2 raySphere(vec3 o, vec3 d, float r) {
           float b = dot(o, d);
@@ -134,6 +135,17 @@ export class AtmospherePass extends Pass {
         }`,
     });
     this.quad = new FullScreenQuad(this.material);
+  }
+
+  /** Switches the scene target (after a quality change). */
+  setSource(source: THREE.WebGLRenderTarget): void {
+    this.source = source;
+  }
+
+  setSteps(view: number, light: number): void {
+    this.material.defines.ATMO_STEPS = view;
+    this.material.defines.ATMO_LSTEPS = light;
+    this.material.needsUpdate = true;
   }
 
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget): void {

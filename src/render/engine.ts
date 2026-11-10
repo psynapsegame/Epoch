@@ -16,6 +16,7 @@ import { U } from './shared';
 import { createClouds, createStars } from './sky';
 import { PlanetTerrain } from './terrain';
 import { createTerrainMaterial } from './terrainMaterial';
+import { PROFILES, type QualityProfile } from './quality';
 import { ATLAS_MODES, buildAtlasTexture, buildCloudTexture, buildWorldTextures, type AtlasMode } from './worldTextures';
 
 const AXIAL_TILT = 23.4 * (Math.PI / 180);
@@ -72,27 +73,26 @@ export class Engine {
   private raycaster = new THREE.Raycaster();
   private fpsAcc = 0;
   private fpsFrames = 0;
-  private quality = 1;
+  /** Active quality profile and dynamic resolution scale (set by the governor). */
+  profile: QualityProfile = PROFILES.high;
+  private resolutionScale = 1;
+  private outputPass = new OutputPass();
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.info.autoReset = false;
 
-    this.sceneRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4 });
-    this.sceneRT.depthTexture = new THREE.DepthTexture(4, 4);
-    this.sceneRT.depthTexture.type = THREE.UnsignedIntType;
+    this.sceneRT = this.createSceneTarget(this.profile.msaa);
 
     this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType }));
     this.atmosphere = new AtmospherePass(this.sceneRT, this.camera);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(4, 4), 0.22, 0.6, 1.0);
     this.composer.addPass(this.atmosphere);
     this.composer.addPass(this.bloom);
-    this.composer.addPass(new OutputPass());
+    this.composer.addPass(this.outputPass);
 
     this.scene.background = new THREE.Color(0x000000);
     this.scene.add(this.stars);
@@ -101,20 +101,22 @@ export class Engine {
     this.planet.add(this.ocean, this.clouds, this.buildings.group);
 
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.6;
     this.scene.add(this.sun, this.sun.target);
 
     this.controls = new CameraController(this.camera, canvas);
-    this.resize();
+    this.applyQuality(this.profile);
     window.addEventListener('resize', () => this.resize());
+    window.addEventListener('orientationchange', () => window.setTimeout(() => this.resize(), 250));
+    // A lost WebGL context (common on phones after backgrounding) is restored by three.js; just re-render.
+    canvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
   }
 
   resize(): void {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
-    const pr = Math.min(window.devicePixelRatio, 2) * this.quality;
+    const pr = Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.profile.pixelRatioCap) * this.resolutionScale);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.sceneRT.setSize(Math.round(w * pr), Math.round(h * pr));
@@ -125,9 +127,69 @@ export class Engine {
     (this.stars.material as THREE.ShaderMaterial).uniforms.uPixelRatio.value = pr;
   }
 
-  /** Render resolution scale (0.5..1) for weaker GPUs. */
-  setQuality(q: number): void {
-    this.quality = clamp(q, 0.4, 1);
+  private createSceneTarget(samples: number): THREE.WebGLRenderTarget {
+    const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples });
+    rt.depthTexture = new THREE.DepthTexture(4, 4);
+    rt.depthTexture.type = THREE.UnsignedIntType;
+    return rt;
+  }
+
+  private get terrainOptions() {
+    const q = this.profile;
+    return { maxLevel: q.maxTerrainLevel, splitFactor: q.splitFactor, treeGrid: q.treeGrid, budgetMs: q.chunkBudgetMs };
+  }
+
+  /** Dynamic resolution scale (0.5..1), driven by the quality governor. */
+  setResolutionScale(scale: number): void {
+    const s = clamp(scale, 0.5, 1);
+    if (s === this.resolutionScale) return;
+    this.resolutionScale = s;
+    this.resize();
+  }
+
+  /** Applies a quality tier: render targets, shadows, post effects, shader variants, LOD. */
+  applyQuality(profile: QualityProfile): void {
+    const previous = this.profile;
+    this.profile = profile;
+
+    if (this.sceneRT.samples !== profile.msaa) {
+      this.sceneRT.dispose();
+      this.sceneRT.depthTexture?.dispose();
+      this.sceneRT = this.createSceneTarget(profile.msaa);
+      this.atmosphere.setSource(this.sceneRT);
+    }
+    this.bloom.enabled = profile.bloom;
+    this.atmosphere.setSteps(profile.atmosphereSteps, profile.atmosphereLightSteps);
+
+    const r = this.renderer;
+    r.shadowMap.enabled = profile.shadowMapSize > 0;
+    r.shadowMap.type = profile.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    if (profile.shadowMapSize > 0 && this.sun.shadow.mapSize.x !== profile.shadowMapSize) {
+      this.sun.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+
+    // Shader variants: every planet material is recompiled with or without EPOCH_LOW.
+    const mats: THREE.Material[] = [
+      this.terrainMaterial, this.ocean.material as THREE.Material, this.clouds.material as THREE.Material,
+      this.buildings.material, ...this.treeAssets.materials,
+    ];
+    const shadowChanged = previous.softShadows !== profile.softShadows || (previous.shadowMapSize > 0) !== (profile.shadowMapSize > 0);
+    for (const m of mats) {
+      const defs = (m.defines ??= {});
+      const had = 'EPOCH_LOW' in defs;
+      if (profile.simpleShaders) defs.EPOCH_LOW = 1;
+      else delete defs.EPOCH_LOW;
+      if (had !== profile.simpleShaders || shadowChanged) m.needsUpdate = true;
+    }
+    for (const t of [U.uTexA.value, U.uTexB.value, U.uCloudTex.value]) {
+      if (t && t.anisotropy !== profile.textureAnisotropy) {
+        t.anisotropy = profile.textureAnisotropy;
+        t.needsUpdate = true;
+      }
+    }
+    this.terrain?.setOptions(this.terrainOptions);
     this.resize();
   }
 
@@ -152,7 +214,8 @@ export class Engine {
     this.atlasMode = 'none';
     this.overlayGoal = 0;
 
-    this.terrain = new PlanetTerrain(world, this.terrainMaterial, this.treeAssets);
+    for (const t of [texA, texB, U.uCloudTex.value]) t.anisotropy = this.profile.textureAnisotropy;
+    this.terrain = new PlanetTerrain(world, this.terrainMaterial, this.treeAssets, this.terrainOptions);
     this.planet.add(this.terrain.group);
     this.planet.visible = true;
     this.atmosphere.material.uniforms.uEnabled.value = 1;
@@ -246,7 +309,7 @@ export class Engine {
     const focus = this.controls.dir.clone().multiplyScalar(this.world?.R ?? 3200);
     this.sun.target.position.copy(focus);
     this.sun.position.copy(focus).addScaledVector(U.uSunDir.value, 2500);
-    const shadowOn = this.controls.distance < 1300 && this.controls.dir.dot(U.uSunDir.value) > -0.05;
+    const shadowOn = this.profile.shadowMapSize > 0 && this.controls.distance < 1300 && this.controls.dir.dot(U.uSunDir.value) > -0.05;
     this.sun.castShadow = shadowOn;
     if (shadowOn) {
       const ext = clamp(this.controls.distance * 1.25, 90, 900);
@@ -291,6 +354,11 @@ export class Engine {
       p.queue = this.terrain.stats.queue;
     }
     p.buildings = this.buildings.count;
+  }
+
+  /** True while one-off work (terrain construction) inflates frame times. */
+  get busy(): boolean {
+    return (this.terrain?.stats.queue ?? 0) > 0;
   }
 
   /** Converts simulated time into the day counter used for the sun. */

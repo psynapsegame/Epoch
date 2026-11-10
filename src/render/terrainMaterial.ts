@@ -115,6 +115,7 @@ export function createTerrainMaterial(): THREE.MeshStandardMaterial {
 
       // --- normal -------------------------------------------------------
       terrainN = normalize(epochUp - sl.x * east - sl.y * north);
+      #ifndef EPOCH_LOW
       if (near > 0.0) {
         float e = 0.35;
         float d0 = vnoise(vWPos * 0.55) + 0.5 * vnoise(vWPos * 1.7);
@@ -123,6 +124,7 @@ export function createTerrainMaterial(): THREE.MeshStandardMaterial {
         float bump = (0.10 + 0.5 * rocky) * near * (1.0 - snow * 0.6);
         terrainN = normalize(terrainN - ((dE - d0) * east + (dN - d0) * north) * bump / e * 0.6);
       }
+      #endif
 
       // --- rivers & lakes ----------------------------------------------
       float wmask = smoothstep(0.42, 0.62, A.b) * step(0.0, h);

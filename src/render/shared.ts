@@ -57,9 +57,15 @@ float vnoise(vec3 p) {
     mix(mix(hash13(i + vec3(0,0,1)), hash13(i + vec3(1,0,1)), f.x), mix(hash13(i + vec3(0,1,1)), hash13(i + vec3(1,1,1)), f.x), f.y),
     f.z);
 }
+#ifdef EPOCH_LOW
+float vfbm(vec3 p) {
+  return vnoise(p) * 0.6 + vnoise(p * 2.03 + 7.1) * 0.34;
+}
+#else
 float vfbm(vec3 p) {
   return vnoise(p) * 0.5 + vnoise(p * 2.03 + 7.1) * 0.25 + vnoise(p * 4.01 + 3.7) * 0.125 + vnoise(p * 8.07) * 0.0625;
 }
+#endif
 // Colour of direct sunlight reaching a place where the sun stands at height sunUp (-1..1).
 vec3 epochSunTint(float sunUp) {
   vec3 warm = mix(vec3(1.0, 0.36, 0.12), vec3(1.0, 0.72, 0.45), smoothstep(-0.02, 0.12, sunUp));

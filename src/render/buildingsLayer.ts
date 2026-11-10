@@ -8,7 +8,7 @@ import type { World } from '../world/world';
 export class BuildingsLayer {
   readonly group = new THREE.Group();
   readonly models: Record<BuildingKind, BuildingModel>;
-  private material: THREE.MeshStandardMaterial;
+  readonly material: THREE.MeshStandardMaterial;
   private meshes = new Map<BuildingKind, THREE.InstancedMesh>();
   /** instance index -> building, per kind (for picking). */
   private lookup = new Map<BuildingKind, Building[]>();

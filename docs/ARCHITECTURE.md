@@ -1,5 +1,8 @@
 # Architecture
 
+> Cible : **smartphones iOS et Android** (paysage, tactile, hors ligne). Voir [MOBILE.md](MOBILE.md) pour
+> l’enveloppe native, les gestes, les paliers de qualité et la gestion de l’énergie.
+
 ## Principes
 
 1. **Séparation stricte simulation / rendu / interface.** La simulation (`src/world`, `src/sim`, `src/core`)
@@ -30,13 +33,18 @@ src/
                 terrainMaterial.ts  shader du sol piloté par les champs du monde
                 ocean.ts · sky.ts · atmospherePass.ts
                 worldTextures.ts  champs du monde → textures GPU, cartes de l’Atlas
-                cameraController.ts  caméra orbite ↔ sol
+                cameraController.ts  caméra orbite ↔ sol (tactile multi-points, souris, clavier)
+                gestures.ts       mathématiques des gestes à deux doigts (pur)
+                quality.ts        paliers de qualité, gouverneur adaptatif, cadence d’images (pur)
                 buildingsLayer.ts · models/ (bâtiments, arbres procéduraux)
                 shared.ts         uniforms et GLSL communs, greffe sur MeshStandardMaterial
-  persistence/  saveStore.ts      IndexedDB, format versionné, export/import
+  persistence/  saveStore.ts      IndexedDB + miroir fichiers natif, format versionné, export/import
+  platform/     platform.ts       différences navigateur / PWA / natif (Capacitor), partage, cycle de vie
+  settings.ts   préférences du joueur (qualité, économie d’énergie)
   ui/           app.ts · styles.css · icons.ts
   game.ts       orchestrateur : horloge + monde + état + rendu + sauvegarde
-tests/          Vitest : générateur, hydrologie, API monde, horloge, RNG, hameaux, sauvegardes
+android/ ios/   projets natifs Capacitor (paysage, plein écran)
+tests/          Vitest : générateur, hydrologie, API monde, horloge, RNG, hameaux, sauvegardes, gestes, gouverneur
 ```
 
 ## Le monde
@@ -72,9 +80,12 @@ tests/          Vitest : générateur, hydrologie, API monde, horloge, RNG, hame
 
 ## Performance
 
-Mode diagnostic (`F3`) : FPS, temps d’image, appels de dessin, triangles, parcelles, arbres, file de
-construction. Réglage de résolution de rendu dans le panneau Monde. La génération du monde s’exécute
-dans un Web Worker (≈ 5 s pour 2 millions de cellules) : l’interface reste fluide.
+Trois paliers de qualité (`render/quality.ts`) règlent résolution, anticrénelage, ombres, bloom, pas
+d’intégration de l’atmosphère, densité des forêts, finesse du terrain et variantes de shaders
+(`EPOCH_LOW`). Un gouverneur mesure les images réelles et abaisse la résolution puis le palier ; la
+boucle de jeu (`game.ts`) cadence l’affichage (60 images/s en interaction, 30 au repos, arrêt en
+arrière-plan). La génération du monde s’exécute dans un Web Worker. Diagnostic en jeu : FPS et cible,
+palier, résolution dynamique, appels de dessin, triangles, parcelles, arbres.
 
 ## Sauvegardes
 
@@ -94,3 +105,4 @@ arrière-plan ; 3 emplacements manuels ; export/import JSON.
   phase 3 ce sont les habitants qui décideront quoi bâtir.
 - WebGL2 uniquement pour l’instant ; l’architecture des matériaux est isolée dans `render/` pour une
   future voie WebGPU.
+- Les performances réelles sur téléphone restent à mesurer (voir MOBILE.md).
