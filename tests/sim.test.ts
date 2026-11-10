@@ -145,6 +145,29 @@ describe('simulation', () => {
     expect(b.state.time).toBe(a.state.time);
   });
 
+  it('restores from its text form, at the coarsest stride used to leap through time', () => {
+    const a = fresh();
+    a.setStride(30);
+    a.run(400);
+    const b = new Simulation(sites, JSON.parse(a.serializeJson()));
+    a.run(400);
+    b.run(400);
+    expect(b.checksum()).toBe(a.checksum());
+    expect(a.state.persons.length).toBeGreaterThan(0);
+  });
+
+  it('reports trade routes only from recorded trade events', () => {
+    const a = fresh();
+    a.run(TICKS_PER_DAY * 3);
+    const routes = a.worldView().routes;
+    const trades = a.state.events.filter((e) => e.type === 'trade' && e.b && e.b !== e.settlement);
+    const total = trades.reduce((n, e) => n + (e.value ?? 0), 0);
+    expect(routes.reduce((n, r) => n + r[2], 0)).toBeCloseTo(total, 6);
+    a.state.events.push({ id: ++a.state.eventSeq, t: a.state.time, type: 'trade', settlement: 0, b: 1, a: 0, what: '0', value: 7, names: ['x'] } as never);
+    const after = a.worldView().routes.find((r) => r[0] === 0 && r[1] === 1);
+    expect(after && after[2]).toBeGreaterThanOrEqual(7);
+  });
+
   it('keeps everyone on walkable ground or indoors', () => {
     const sim = fresh();
     for (let d = 0; d < 40; d++) {
@@ -626,7 +649,9 @@ describe('war and diplomacy', () => {
     expect(war.end).toBeGreaterThan(war.start);
     expect(['attacker', 'defender', 'draw']).toContain(war.outcome);
     expect(r.status).toBe('peace');
-    expect(r.truceUntil).toBeGreaterThan(sim.state.time);
+    // a treaty brings a truce; a war ended by the fall of a people needs none
+    const fell = sim.state.civs.some((c) => (c.id === pair.a.id || c.id === pair.b.id) && c.fallen);
+    if (!fell) expect(r.truceUntil).toBeGreaterThan(sim.state.time);
     expect(sim.state.events.some((e) => e.type === 'peace')).toBe(true);
     // nobody is left under arms once the war is over and the armies are home
     sim.run(TICKS_PER_DAY * 5);

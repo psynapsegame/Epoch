@@ -4,10 +4,13 @@ import type { ToWorker } from './sim.worker';
 import type { FamilyTree } from './types';
 import type { EconomyView, FoundingBuilding, PersonView, RosterEntry, SearchHit, SimBuilding, SimSite, SimState, Snapshot, WorldView } from './types';
 
+/** The simulation state as serialised text, with its time. */
+export interface StateText { json: string; time: number }
+
 /** Main-thread handle on the simulation worker. */
 export class SimClient {
   private worker: Worker;
-  private pending = new Map<number, (s: SimState) => void>();
+  private pending = new Map<number, (s: StateText) => void>();
   private nextRequest = 1;
   snapshot: Snapshot | null = null;
   /** performance.now() when the last snapshot arrived. */
@@ -16,7 +19,12 @@ export class SimClient {
   roster: RosterEntry[] = [];
   rosterById = new Map<number, RosterEntry>();
   /** Most recent full state published by the worker (at most ~10 s old): used by autosave. */
-  lastState: SimState | null = null;
+  lastState: StateText | null = null;
+  /** Fast-forward in progress (0..1), or null. */
+  skipping: number | null = null;
+  onSkipDone: ((time: number) => void) | null = null;
+  /** Cost of the simulation: milliseconds per step, current coarseness. */
+  load = { stepMs: 0, stride: 1, people: 0 };
   buildings: SimBuilding[] = [];
   economy: EconomyView | null = null;
   /** Civilisations, religions and recent history. */
@@ -55,6 +63,13 @@ export class SimClient {
           this.world = m.world as WorldView;
           this.onWorld?.();
           break;
+        case 'skip':
+          this.skipping = m.done ? null : (m.progress as number);
+          if (m.done) this.onSkipDone?.(m.time as number);
+          break;
+        case 'load':
+          this.load = { stepMs: m.stepMs, stride: m.stride, people: m.people };
+          break;
         case 'reply':
           this.replies.get(m.request)?.(m.value);
           this.replies.delete(m.request);
@@ -71,9 +86,9 @@ export class SimClient {
           this.onDetail?.(m.id, m.view);
           break;
         case 'state':
-          this.lastState = m.state as SimState;
+          this.lastState = { json: m.json as string, time: m.time as number };
           if (m.request) {
-            this.pending.get(m.request)?.(m.state);
+            this.pending.get(m.request)?.(this.lastState);
             this.pending.delete(m.request);
           }
           break;
@@ -91,6 +106,7 @@ export class SimClient {
     this.world = null;
     this.snapshot = null;
     this.lastState = null;
+    this.skipping = null;
     this.roster = [];
     this.rosterById.clear();
     this.send({ type: 'init', seed, sites, founding, population, time, state });
@@ -152,7 +168,17 @@ export class SimClient {
   }
 
   /** Fetches an exact copy of the current state (for manual saves). */
-  requestState(): Promise<SimState> {
+  /** Leaps forward in time as fast as the device allows (coarse, aggregated simulation). */
+  skip(seconds: number): void {
+    this.skipping = 0;
+    this.send({ type: 'skip', seconds });
+  }
+
+  cancelSkip(): void {
+    this.send({ type: 'cancelSkip' });
+  }
+
+  requestState(): Promise<StateText> {
     return new Promise((resolve) => {
       const request = this.nextRequest++;
       this.pending.set(request, resolve);

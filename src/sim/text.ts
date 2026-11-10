@@ -42,7 +42,8 @@ export function eventText(e: SimEvent, place: (id: number) => string): string {
     case 'faithEnd': return `Plus personne ne suit ${e.what}`;
     case 'colony': return `${e.value} colons partis de ${place(e.b ?? 0)} s’installent à ${place(e.settlement)}${n.length ? ` (${n.join(', ')}…)` : ''}`;
     case 'war': return e.what === 'alliance' ? `${n[0]} entre en guerre contre ${n[1]} pour honorer son alliance` : `${n[0]} déclare la guerre à ${n[1]} — cause : ${WAR_CAUSE_LABELS[e.what as WarCause] ?? e.what}`;
-    case 'peace': return `Paix entre ${n[0]} et ${n[1]} après ${e.value} morts${e.what === 'attacker' ? ` : ${n[0]} l’emporte` : e.what === 'defender' ? ` : ${n[1]} l’emporte` : ', sans vainqueur'}`;
+    case 'peace': if (e.what === 'fallen') return `La guerre s’achève : ${n[1]} n’est plus, ${n[0]} reste seul maître du terrain (${e.value} morts)`;
+      return `Paix entre ${n[0]} et ${n[1]} après ${e.value} morts${e.what === 'attacker' ? ` : ${n[0]} l’emporte` : e.what === 'defender' ? ` : ${n[1]} l’emporte` : ', sans vainqueur'}`;
     case 'alliance': return e.what === 'broken' ? `L’alliance de ${n[0]} et ${n[1]} est rompue` : `${n[0]} et ${n[1]} scellent une alliance`;
     case 'siege': return `L’armée de ${n[0]} met le siège devant ${place(e.settlement)}`;
     case 'battle': return `Bataille de ${place(e.settlement)} : ${e.what === 'attackers' ? `victoire de ${n[0]}` : `${n[1]} repousse ${n[0]}`} (${e.value} morts)`;

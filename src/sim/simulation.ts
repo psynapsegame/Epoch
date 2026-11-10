@@ -66,6 +66,9 @@ export class Simulation {
   private censusData = new Map<number, { pop: number; adults: number }>();
   private causes = new Map<number, DeadPerson['cause']>();
   private modsCache = new Map<number, Mods>();
+  /** Living people by settlement (rebuilt lazily when someone is born, dies or moves away). */
+  private residents = new Map<number, Person[]>();
+  private residentsDirty = true;
   /** Bumped whenever the set of living people (or their jobs / homes) changes. */
   rosterVersion = 0;
   /** Bumped whenever a building is added or progresses. */
@@ -192,10 +195,30 @@ export class Simulation {
     return this.censusData.get(site) ?? { pop: 0, adults: 0 };
   }
 
+  /** Everyone living in a settlement. */
+  residentsOf(site: number): Person[] {
+    if (this.residentsDirty) {
+      this.residents.clear();
+      for (const p of this.state.persons) {
+        let list = this.residents.get(p.settlement);
+        if (!list) this.residents.set(p.settlement, (list = []));
+        list.push(p);
+      }
+      this.residentsDirty = false;
+    }
+    return this.residents.get(site) ?? [];
+  }
+
   /** Deep copy of the whole state, safe to store or send to another thread. */
   serialize(): SimState {
     this.state.rng = this.rng.state;
     return JSON.parse(JSON.stringify(this.state)) as SimState;
+  }
+
+  /** The whole state as text (cheap to hand to another thread and to store). */
+  serializeJson(): string {
+    this.state.rng = this.rng.state;
+    return JSON.stringify(this.state);
   }
 
   run(ticks: number): void {
@@ -1162,10 +1185,17 @@ export class Simulation {
       case Activity.Socializing: {
         const age = ageAt(p, this.state.time);
         let best: Person | null = null, bestScore = -Infinity;
-        const persons = this.state.persons;
-        for (let i = 0; i < persons.length; i++) {
-          const o = persons[i];
-          if (o === p || o.settlement !== p.settlement || o.inside || o.trip || o.activity === Activity.Sleeping || o.partner !== 0) continue;
+        // in a town one cannot know everybody: look among a few dozen neighbours, and one's own circle
+        const here = this.residentsOf(p.settlement);
+        const sample = Math.min(here.length, 40);
+        const start = here.length > sample ? Math.floor(rng.next() * here.length) : 0;
+        const stepBy = here.length > sample ? 1 + Math.floor(rng.next() * 7) * 2 : 1;
+        const candidates: Person[] = [];
+        for (let k = 0; k < sample; k++) candidates.push(here[(start + k * stepBy) % here.length]);
+        if (here.length > sample) for (const id of Object.keys(p.bonds)) { const f = this.byId.get(+id); if (f && f.settlement === p.settlement) candidates.push(f); }
+        for (let i = 0; i < candidates.length; i++) {
+          const o = candidates[i];
+          if (o === p || o.inside || o.trip || o.army || o.activity === Activity.Sleeping || o.partner !== 0) continue;
           if (ageAt(o, this.state.time) < 13 !== age < 13) continue;
           const d = Math.hypot(o.e - p.e, o.n - p.n);
           let score = (p.bonds[o.id] ?? 0) * (0.4 + p.traits[T.Loyalty]) + rng.next() * 0.6 - d / 220;
@@ -1247,6 +1277,7 @@ export class Simulation {
     child.n = door.n;
     s.persons.push(child);
     this.byId.set(child.id, child);
+    this.residentsDirty = true;
     this.households.get(mother.household)!.members.push(child.id);
     for (const par of [mother, father]) {
       if (!par) continue;
@@ -1314,6 +1345,7 @@ export class Simulation {
       }
     }
     this.censusTick = -1;
+    this.residentsDirty = true;
     this.rosterVersion++;
     for (const p of gone) onDeath(this, p);
   }
@@ -1488,6 +1520,7 @@ export class Simulation {
       }
     }
     this.censusTick = -1;
+    this.residentsDirty = true;
     this.refreshSite(target);
     this.rosterVersion++;
     this.record({ t, type: 'colony', settlement: target, b: from.id, civ: from.civ, value: heads, names });
@@ -1538,6 +1571,14 @@ export class Simulation {
   /** Political, cultural and religious picture of the world. */
   worldView(): WorldView {
     const s = this.state;
+    const flows = new Map<number, number>();
+    const since = s.time - 3 * SECONDS_PER_YEAR;
+    for (let i = s.events.length - 1; i >= 0 && s.events[i].t > since; i--) {
+      const e = s.events[i];
+      if (e.type !== 'trade' || !e.b || e.b === e.settlement) continue;
+      const k = Math.min(e.settlement, e.b) * 4096 + Math.max(e.settlement, e.b);
+      flows.set(k, (flows.get(k) ?? 0) + (e.value ?? 0));
+    }
     const settlements: WorldView['settlements'] = {};
     for (const st of s.settlements) settlements[st.id] = [st.civ, this.census(st.id).pop];
     const faith = new Map<number, number>();
@@ -1567,6 +1608,7 @@ export class Simulation {
       }),
       events: s.events.slice(-500),
       divine: { ...s.divine },
+      routes: [...flows].map(([k, q]) => [Math.floor(k / 4096), k % 4096, q]),
     };
   }
 

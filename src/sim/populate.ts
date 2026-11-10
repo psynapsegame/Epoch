@@ -33,10 +33,14 @@ export function blankPerson(rng: Rng, id: number, sex: 0 | 1, birth: number, las
   };
 }
 
+const FAM_MID = ['', '', 'de', 'an', 'el', 'ar', 'in', 'os'];
+
 function familyName(rng: Rng, used: Set<string>): string {
-  for (;;) {
-    const n = rng.pick(FAM_A) + rng.pick(FAM_B);
-    if (!used.has(n)) {
+  // short names first; longer ones as the world fills up; namesakes only when every name is taken
+  for (let attempt = 0; ; attempt++) {
+    const mid = attempt < 12 ? '' : rng.pick(FAM_MID);
+    const n = rng.pick(FAM_A) + mid + rng.pick(FAM_B);
+    if (!used.has(n) || attempt > 200) {
       used.add(n);
       return n;
     }

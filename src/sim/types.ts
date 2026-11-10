@@ -611,6 +611,8 @@ export interface WorldView {
   /** Most recent recorded events of the whole world, oldest first. */
   events: SimEvent[];
   divine: { energy: number; acts: number };
+  /** Goods actually carried between settlements over the last three years: [from, to, quantity]. */
+  routes: [number, number, number][];
 }
 
 /** A person as shown in a family tree (living or dead). */

@@ -20,7 +20,7 @@ import { createClouds, createStars } from './sky';
 import { PlanetTerrain } from './terrain';
 import { createTerrainMaterial } from './terrainMaterial';
 import { PROFILES, type QualityProfile } from './quality';
-import { ATLAS_MODES, buildAtlasTexture, buildCloudTexture, buildPoliticalTexture, buildWorldTextures, type AtlasMode, type PoliticalMark } from './worldTextures';
+import { ATLAS_MODES, POLITICAL_MODES, buildAtlasTexture, buildCloudTexture, buildPoliticalTexture, buildWorldTextures, type AtlasMode, type PoliticalMark } from './worldTextures';
 
 const AXIAL_TILT = 23.4 * (Math.PI / 180);
 const Y = new THREE.Vector3(0, 1, 0);
@@ -253,7 +253,7 @@ export class Engine {
     this.terrain.invalidate(dir.clone().multiplyScalar(world.R), edit.radius);
     this.terrain.refreshTrees();
     this.buildings.invalidate();
-    if (this.atlasMode !== 'none' && this.atlasTex && !['borders', 'population', 'religions', 'wars'].includes(this.atlasMode)) buildAtlasTexture(world.data, this.atlasMode, this.atlasTex);
+    if (this.atlasMode !== 'none' && this.atlasTex && !POLITICAL_MODES.includes(this.atlasMode)) buildAtlasTexture(world.data, this.atlasMode, this.atlasTex);
   }
 
   /** Darkens the sky for a while (storms). */
@@ -340,6 +340,7 @@ export class Engine {
     U.uSunDir.value.set(Math.cos(decl) * Math.cos(hourAngle), Math.sin(decl), Math.cos(decl) * Math.sin(hourAngle)).normalize();
     this.stars.quaternion.setFromAxisAngle(Y, -hourAngle);
     U.uCloudShift.value = (U.uTime.value * 0.0006) % 1;
+    this.buildings.update(this.camera.position, this.renderer.domElement.height, this.camera.fov);
     this.stormTime = Math.max(0, this.stormTime - dt);
     const cover = this.stormTime > 0 ? 0.82 : 0.44;
     U.uCloudCover.value += (cover - U.uCloudCover.value) * Math.min(1, dt * 0.8);
@@ -406,7 +407,7 @@ export class Engine {
       p.trees = this.terrain.stats.treesVisible;
       p.queue = this.terrain.stats.queue;
     }
-    p.buildings = this.buildings.count;
+    p.buildings = this.buildings.drawn;
     p.people = this.people.drawn;
   }
 

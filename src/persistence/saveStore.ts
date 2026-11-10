@@ -24,6 +24,8 @@ export interface SaveData {
   camera: CameraState;
   /** The whole society: individuals, families, households, the dead (null in saves older than phase 2). */
   sim: SimState | null;
+  /** The same society as serialised text: what is actually stored (parsed only when a save is loaded). */
+  simJson?: string | null;
   /** Divine changes made to the planet, replayed in order after regeneration. */
   worldEdits: WorldEdit[];
 }
@@ -61,7 +63,10 @@ export function validateSave(data: unknown): SaveData {
   if (!s || typeof s !== 'object') throw new Error('Sauvegarde illisible');
   // version 1 (phase 1, no inhabitants) is still readable: the population is founded at load time
   if (s.version !== SAVE_VERSION && s.version !== 1) throw new Error(`Version de sauvegarde non prise en charge (${String(s.version)})`);
-  const sim = s.version === SAVE_VERSION ? s.sim ?? null : null;
+  let sim = s.version === SAVE_VERSION ? s.sim ?? null : null;
+  if (!sim && s.version === SAVE_VERSION && typeof s.simJson === 'string') {
+    try { sim = JSON.parse(s.simJson) as SimState; } catch { throw new Error('Population illisible'); }
+  }
   if (sim && (!Array.isArray(sim.persons) || !Array.isArray(sim.households) || typeof sim.time !== 'number')) throw new Error('Population illisible');
   if (typeof s.seed !== 'string' || !s.seed) throw new Error('Graine manquante');
   if (typeof s.simTime !== 'number' || !Number.isFinite(s.simTime)) throw new Error('Date invalide');
@@ -118,7 +123,9 @@ export const saveStore = {
 };
 
 export function exportSave(save: SaveData): string {
-  return JSON.stringify({ format: 'epoch-save', ...save }, null, 2);
+  // exported files carry the society as readable data, not as embedded text
+  const sim = save.sim ?? (save.simJson ? (JSON.parse(save.simJson) as SimState) : null);
+  return JSON.stringify({ format: 'epoch-save', ...save, sim, simJson: undefined });
 }
 
 export function importSave(text: string): SaveData {

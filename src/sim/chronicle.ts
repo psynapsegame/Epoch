@@ -95,7 +95,8 @@ function tell(e: SimEvent, c: Ctx): string | null {
     case 'faithEnd': return `${e.what} perdit son dernier fidèle`;
     case 'colony': return `${plural(e.value ?? 0, 'colon', 'colons')} quittèrent ${c.place(e.b ?? 0)} pour s’établir à ${where}${n.length ? `, parmi eux ${n.slice(0, 2).join(' et ')}` : ''}`;
     case 'war': return e.what === 'alliance' ? `${n[0]} entra en guerre contre ${n[1]} pour honorer son alliance` : `${n[0]} déclara la guerre à ${n[1]}, poussé par ${WAR_CAUSE_LABELS[e.what as WarCause] ?? 'la discorde'}`;
-    case 'peace': return `${n[0]} et ${n[1]} firent la paix après ${plural(e.value ?? 0, 'mort', 'morts')}` + (e.what === 'attacker' ? `, à l’avantage de ${n[0]}` : e.what === 'defender' ? `, à l’avantage de ${n[1]}` : ', sans vainqueur');
+    case 'peace': if (e.what === 'fallen') return `la guerre prit fin avec la disparition de ${n[1]}, après ${plural(e.value ?? 0, 'mort', 'morts')}`;
+      return `${n[0]} et ${n[1]} firent la paix après ${plural(e.value ?? 0, 'mort', 'morts')}` + (e.what === 'attacker' ? `, à l’avantage de ${n[0]}` : e.what === 'defender' ? `, à l’avantage de ${n[1]}` : ', sans vainqueur');
     case 'alliance': return e.what === 'broken' ? `l’alliance de ${n[0]} et de ${n[1]} fut rompue` : `${n[0]} et ${n[1]} scellèrent une alliance`;
     case 'siege': return `l’armée de ${n[0]} mit le siège devant ${where}`;
     case 'battle': return e.what === 'attackers' ? `${n[0]} l’emporta à la bataille ${de(where)}, qui coûta ${plural(e.value ?? 0, 'vie', 'vies')}` : `${n[1]} repoussa ${n[0]} à la bataille ${de(where)}, au prix de ${plural(e.value ?? 0, 'mort', 'morts')}`;

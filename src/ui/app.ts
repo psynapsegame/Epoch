@@ -6,7 +6,7 @@ import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import './styles.css';
 import type { Game } from '../game';
-import { SEASONS, SECONDS_PER_YEAR, SPEEDS } from '../sim/clock';
+import { SEASONS, SECONDS_PER_YEAR, SPEEDS, dateOf } from '../sim/clock';
 import { BUILDING_NAMES, TRADITION_NAMES, eventText, formatDate, memoryText } from '../sim/text';
 import { TECHS, TECH_BY_ID } from '../sim/tech';
 import { FAITH_COLORS_HEX, civCss } from '../render/palette';
@@ -38,7 +38,7 @@ const SECTIONS: { id: SectionId; label: string; phase: number }[] = [
   { id: 'chronicles', label: 'Chroniques', phase: 7 },
   { id: 'divinity', label: 'Divinité', phase: 6 },
 ];
-const CURRENT_PHASE = 7;
+const CURRENT_PHASE = 8;
 
 const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
   hut: ['Hutte', 'Abri rudimentaire pour une petite famille.'],
@@ -82,6 +82,8 @@ export class App {
   private tutorial: HTMLElement;
   private intro: HTMLElement;
   private toastEl: HTMLElement;
+  private leap: HTMLElement;
+  private leapFrom = 0;
   private section: SectionId | null = null;
   private lastHud = 0;
   private tutorialState = { move: false, zoom: false, rotate: false, inspect: false, atlas: false };
@@ -142,7 +144,14 @@ export class App {
     this.armedBar = el(`<div id="armed" class="glass hidden"><div><b></b><br><span></span></div><button class="btn" data-a="disarm">Annuler</button></div>`);
     this.armedBar.querySelector('button')!.addEventListener('click', () => this.arm(null));
     this.root.append(this.labels, this.armedBar);
-    this.root.append(this.topbar, this.nav, this.panel, this.inspector, this.viewbar, this.perf, this.tutorial, this.toastEl, this.intro, rotate);
+    this.leap = el(`<div id="leap" class="glass hidden"><div class="t"></div><div class="bar"><i></i></div><button class="btn">Arrêter ici</button></div>`);
+    this.leap.querySelector('button')!.addEventListener('click', () => game.sim.cancelSkip());
+    game.sim.onSkipDone = (time) => {
+      const years = Math.round((time - this.leapFrom) / SECONDS_PER_YEAR);
+      this.toast(`Le temps a passé : ${years} an${years > 1 ? 's' : ''} — an ${fmt(dateOf(time).year)}`);
+      if (this.section) this.openSection(this.section);
+    };
+    this.root.append(this.topbar, this.nav, this.panel, this.inspector, this.viewbar, this.perf, this.tutorial, this.toastEl, this.leap, this.intro, rotate);
 
     this.buildTopbar();
     this.buildNav();
@@ -277,9 +286,15 @@ export class App {
     this.viewbar.querySelector('.readout')!.textContent =
       `${fmt(Math.abs(lat), 1)}° ${lat >= 0 ? 'N' : 'S'}  ${fmt(Math.abs(lon), 1)}° ${lon >= 0 ? 'E' : 'O'}  ·  altitude ${fmt(Math.max(0, c.altitude))} m`;
 
+    const leaping = g.sim.skipping;
+    this.leap.classList.toggle('hidden', leaping === null);
+    if (leaping !== null) {
+      this.leap.querySelector('.t')!.textContent = `Les années défilent… an ${fmt(d.year)} · ${fmt(sum.population)} habitants`;
+      (this.leap.querySelector('i') as HTMLElement).style.width = `${Math.round(leaping * 100)}%`;
+    }
     if (!this.perf.classList.contains('hidden')) {
       const p = g.engine.perf;
-      this.perf.innerHTML = `<b>DIAGNOSTIC</b><br>FPS ${fmt(p.fps)} (cible ${g.pacedFps}) · image ${fmt(p.frameMs, 1)} ms<br>Qualité ${TIER_LABELS[g.tier]} · résolution ${fmt(g.governor.scale * 100)} %<br>Appels de dessin ${fmt(p.drawCalls)}<br>Triangles ${fmt(p.triangles)}<br>Parcelles de terrain ${p.chunks} / ${p.chunksTotal} (file ${p.queue})<br>Arbres affichés ${fmt(p.trees)}<br>Bâtiments ${fmt(p.buildings)}<br>Habitants affichés ${fmt(p.people)}${g.sim.lagging ? ' · simulation ralentie' : ''}<br>Géométries ${p.geometries} · textures ${p.textures}<br>Individus simulés ${fmt(sum.population)}`;
+      this.perf.innerHTML = `<b>DIAGNOSTIC</b><br>FPS ${fmt(p.fps)} (cible ${g.pacedFps}) · image ${fmt(p.frameMs, 1)} ms<br>Qualité ${TIER_LABELS[g.tier]} · résolution ${fmt(g.governor.scale * 100)} %<br>Appels de dessin ${fmt(p.drawCalls)}<br>Triangles ${fmt(p.triangles)}<br>Parcelles de terrain ${p.chunks} / ${p.chunksTotal} (file ${p.queue})<br>Arbres affichés ${fmt(p.trees)}<br>Bâtiments ${fmt(p.buildings)}<br>Habitants affichés ${fmt(p.people)}${g.sim.lagging ? ' · simulation ralentie' : ''}<br>Géométries ${p.geometries} · textures ${p.textures}<br>Individus simulés ${fmt(sum.population)}<br>Simulation ${fmt(g.sim.load.stepMs, 2)} ms / pas · pas de ${g.sim.load.stride} min${g.sim.load.stride >= 6 ? ' (agrégée)' : ''}`;
     }
     if (this.section === 'population' && now - this.lastPopulationUpdate > 900) this.updatePopulation();
     if (this.section === 'economy' && now - this.lastPopulationUpdate > 900 && !this.panelHeld) this.renderEconomyPanel();
@@ -376,6 +391,9 @@ export class App {
       <p class="note">Bâtis sur les terres les plus propices du monde (fertilité, eau douce, relief). Les familles fondatrices s’y sont installées à l’aube de l’an 1.</p>
       <h3>Terres propices encore vierges</h3>
       <div class="list">${w.data.sites.slice(g.settlements.length, g.settlements.length + 6).map((s, i) => `<button class="row" data-site="${i + g.settlements.length}"><span class="name">Site ${i + 1 + g.settlements.length}</span><small>${[s.riverside ? 'eau douce' : '', s.coastal ? 'côtier' : ''].filter(Boolean).join(' · ') || 'intérieur'} · indice ${fmt(s.score * 100)}</small></button>`).join('')}</div>
+      <h3>Traverser le temps</h3>
+      <div class="btns">${[1, 10, 50].map((y) => `<button class="btn" data-leap="${y}">+ ${y} an${y > 1 ? 's' : ''}</button>`).join('')}</div>
+      <p class="note">Le monde est simulé à pleine puissance, sans rien sauter : chaque naissance, récolte et bataille a réellement lieu. La durée dépend de l’appareil et de la population ; on peut arrêter à tout moment.</p>
       <h3>Sauvegardes</h3>
       <div class="list">${slotRow('auto', 'Automatique')}${slotRow('slot1', 'Emplacement I')}${slotRow('slot2', 'Emplacement II')}${slotRow('slot3', 'Emplacement III')}</div>
       <div class="btns" style="margin-top:10px"><button class="btn" data-a="export">Exporter</button><button class="btn" data-a="import">Importer</button><button class="btn" data-a="new">Nouveau monde</button></div>
@@ -407,6 +425,11 @@ export class App {
     body.querySelectorAll<HTMLElement>('[data-load]').forEach((b) => b.addEventListener('click', async () => {
       const s = await saveStore.get(b.dataset.load!);
       if (s) void this.loadSave(s);
+    }));
+    body.querySelectorAll<HTMLElement>('[data-leap]').forEach((b) => b.addEventListener('click', () => {
+      this.leapFrom = g.clock.time;
+      g.skipYears(Number(b.dataset.leap));
+      this.openSection(null);
     }));
     body.querySelectorAll<HTMLElement>('[data-q]').forEach((b) => b.addEventListener('click', () => g.setQuality(b.dataset.q as typeof g.settings.quality)));
     body.querySelector('[data-a="eco"]')!.addEventListener('click', () => { g.setEco(!g.settings.eco); void this.renderWorldPanel(); });

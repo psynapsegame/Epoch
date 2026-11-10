@@ -373,6 +373,9 @@ export function diplomacyDaily(sim: Simulation): void {
       const r = relationOf(sim, war.attacker, war.defender);
       r.status = 'peace';
       r.since = t;
+      // the war ends because a people is no more: this too is written down
+      const [left, gone] = alive(A) ? [A, D] : [D, A];
+      sim.record({ t, type: 'peace', settlement: left.capital, civ: left.id, b: gone.id, what: 'fallen', names: [left.name, gone.name], value: war.deathsAttacker + war.deathsDefender });
       for (const army of s.armies) if (army.war === war.id && army.state !== 'return') sendHome(sim, army);
     }
   }

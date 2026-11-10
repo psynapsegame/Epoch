@@ -10,6 +10,18 @@
 | 5 — Les conflits | Relations entre peuples, alliances, causes de guerre, soldats et levées, armées en marche, sièges, batailles par duels, conquêtes et pillage, traités, occupations, soulèvements et sécessions, carte des guerres | **Livrée** |
 | 6 — Les pouvoirs divins | 14 pouvoirs aux effets réels et persistants (bienfaits, fléaux, remodelage de la planète), ferveur comme ressource, réactions des peuples selon leurs croyances, modifications du monde sauvegardées et rejouées | **Livrée** |
 | 7 — Les chroniques | Événements identifiés, annales chiffrées exactes, annales du monde et chroniques des peuples où chaque phrase cite ses sources, récits de vie, arbres généalogiques, export des récits | **Livrée** |
-| 8 — Polissage | Graphismes, animations, performances mobiles (5 000–10 000 individus simulés, rendu agrégé), voie WebGPU, expérience | À venir |
+| 8 — Polissage | Passage à l’échelle de la simulation (index par bourg, vie sociale échantillonnée, état transmis en texte), saut dans le temps « + N ans », bâtiments dessinés par bourg, fumée des foyers habités, carte des routes commerciales tirée des échanges réels, coût de la simulation dans le diagnostic | **Livrée en partie** — voir ci-dessous |
 
 Règle : on ne passe pas à la phase suivante si le socle précédent est cassé (tests + vérification en navigateur).
+
+## Ce qui reste hors de portée ou non fait
+
+Dit sans détour, par rapport au cahier des charges d’origine :
+
+- **Non vérifié** : fluidité sur téléphones réels, compilation des applications iOS / Android,
+  populations au-delà de 3 630 habitants (voir [PERFORMANCE.md](PERFORMANCE.md)).
+- **Non réalisé** : routes, ponts, murailles et châteaux bâtis par les habitants ; navires visibles
+  (le commerce maritime existe dans la simulation, pas à l’image) ; faune ; voie WebGPU ;
+  enrichissement des chroniques par un modèle de langage (point d’extension documenté, non branché).
+- **Rarement observé** : guerres et coups de force spontanés (les mécanismes sont testés en les
+  provoquant ; ils surviennent d’eux-mêmes sur des durées longues).

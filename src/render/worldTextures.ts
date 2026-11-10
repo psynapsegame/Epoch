@@ -93,10 +93,10 @@ export function buildCloudTexture(seed: string, width = 1024): THREE.DataTexture
 
 export type AtlasMode =
   | 'none' | 'elevation' | 'temperature' | 'moisture' | 'fertility' | 'biomes' | 'resources' | 'biodiversity' | 'landmasses'
-  | 'borders' | 'population' | 'religions' | 'wars';
+  | 'borders' | 'population' | 'religions' | 'wars' | 'trade';
 
 /** Maps drawn from the living simulation rather than from the world grid. */
-export const POLITICAL_MODES: AtlasMode[] = ['borders', 'population', 'religions', 'wars'];
+export const POLITICAL_MODES: AtlasMode[] = ['borders', 'population', 'religions', 'wars', 'trade'];
 
 /** A settlement's zone of influence to paint on a political map. */
 export interface PoliticalMark {
@@ -105,6 +105,8 @@ export interface PoliticalMark {
   radius: number;
   color: number;
   strength: number;
+  /** Also painted over the sea (shipping lanes). */
+  sea?: boolean;
 }
 
 export const ATLAS_MODES: { id: AtlasMode; label: string; legend: [string, string][] }[] = [
@@ -120,6 +122,7 @@ export const ATLAS_MODES: { id: AtlasMode; label: string; legend: [string, strin
   { id: 'borders', label: 'Frontières', legend: [] },
   { id: 'population', label: 'Population', legend: [['#5a4424', 'Clairsemée'], ['#ffb347', 'Dense']] },
   { id: 'religions', label: 'Religions', legend: [] },
+  { id: 'trade', label: 'Routes commerciales', legend: [['#ffd166', 'Route terrestre'], ['#5ec8e0', 'Route maritime'], ['#8a7a5a', 'Bourg']] },
   { id: 'wars', label: 'Guerres', legend: [['#c0392b', 'Peuple en guerre'], ['#e67e22', 'Terre occupée'], ['#f1c40f', 'Assiégée'], ['#4a6f8a', 'En paix']] },
 ];
 
@@ -176,7 +179,7 @@ export function buildPoliticalTexture(w: WorldData, marks: PoliticalMark[], tex:
       for (let dx = -rx; dx <= rx; dx++) {
         const x = (((Math.floor(cx) + dx) % W) + W) % W;
         const i = y * W + x;
-        if (w.water[i] === Water.Ocean) continue;
+        if (w.water[i] === Water.Ocean && !m.sea) continue;
         const d = Math.hypot((dx * cell * cl), (y + 0.5 - cy) * cell) / m.radius;
         if (d > 1 || d >= best[i]) continue;
         best[i] = d;

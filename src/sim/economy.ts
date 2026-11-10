@@ -160,7 +160,7 @@ export function assignJobs(sim: Simulation, st: SettlementState): void {
   const time = sim.state.time;
   atWarCache = (civ) => atWar(sim, civ);
   const slots = jobSlots(sim, st);
-  const people = sim.state.persons.filter((p) => p.settlement === st.id);
+  const people = sim.residentsOf(st.id);
   const pool: Person[] = [];
   const ruler = sim.civOf(st.id)?.leader ?? 0;
   for (const p of people) {
@@ -506,7 +506,7 @@ export function lifeCycle(sim: Simulation, st: SettlementState): void {
   const s = sim.state;
   const time = s.time;
   const rng = sim.rng;
-  const people = s.persons.filter((p) => p.settlement === st.id);
+  const people = [...sim.residentsOf(st.id)];
   const single = (p: Person) => (!p.spouse || !sim.person(p.spouse)) && !p.trip;
 
   // --- unions: two unattached adults who have grown fond of each other

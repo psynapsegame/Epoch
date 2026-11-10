@@ -6,7 +6,7 @@ joueur-divinité. Paysage, tactile, hors ligne.
 
 > « Avant les royaumes, avant les guerres, avant les légendes, il n’existait qu’un monde. »
 
-Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 7 — les chroniques.**
+Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 8 — polissage et passage à l’échelle** (livrée en partie : ce qui reste est listé dans la feuille de route).
 
 ## Lancer
 
@@ -121,5 +121,17 @@ Détails : [docs/DIVINITY.md](docs/DIVINITY.md).
   vivants et des morts ; export des récits.
 
 Détails : [docs/CHRONICLES.md](docs/CHRONICLES.md).
+
+## Ce que contient la phase 8
+
+- **Traverser le temps** : « + 1 / 10 / 50 ans » simule réellement les années à pleine puissance,
+  avec progression et arrêt à tout moment.
+- **Passage à l’échelle** : simulation mesurée jusqu’à 3 630 habitants ; état de sauvegarde transmis
+  en texte ; bâtiments dessinés par bourg.
+- **Fumée des foyers** au-dessus des seules maisons habitées ; **carte des routes commerciales**
+  tracée d’après les marchandises réellement transportées.
+- **Diagnostic** enrichi du coût de la simulation.
+
+Mesures et limites : [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 Architecture détaillée : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

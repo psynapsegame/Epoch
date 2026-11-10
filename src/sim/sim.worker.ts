@@ -15,6 +15,8 @@ export type ToWorker =
   | { type: 'rate'; rate: number; stride: number }
   | { type: 'watch'; id: number }
   | { type: 'state'; request: number }
+  | { type: 'skip'; seconds: number }
+  | { type: 'cancelSkip' }
   | { type: 'search'; request: number; query: string }
   | { type: 'divine'; request: number; act: DivineAct }
   | { type: 'chronicle'; request: number; scope: number }
@@ -32,6 +34,15 @@ let lastSnapshot = 0, lastDetail = 0, lastState = 0, lastRoster = 0, lastBuildin
 let rosterVersion = -1;
 let buildingsVersion = -1;
 let lastEconomy = 0;
+/** Fast-forward in progress: target time, and the settings to restore afterwards. */
+let skip: { from: number; until: number; stride: number } | null = null;
+let stepMs = 0;
+
+function postState(request: number): void {
+  if (!sim) return;
+  // sent as text: the main thread stores it as is and never has to walk the object graph
+  ctx.postMessage({ type: 'state', json: sim.serializeJson(), time: sim.state.time, request });
+}
 let lastWorld = 0;
 
 function postSnapshot(lagging: boolean): void {
@@ -59,12 +70,14 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
       postSnapshot(false);
       lastWorld = 0;
       lastEconomy = 0;
-      ctx.postMessage({ type: 'state', state: sim.serialize(), request: 0 });
+      postState(0);
+      skip = null;
       break;
     case 'rate':
       rate = m.rate;
       if (rate === 0) budget = 0;
-      sim?.setStride(m.stride);
+      if (skip) skip.stride = m.stride;
+      else sim?.setStride(m.stride);
       break;
     case 'watch':
       watch = m.id;
@@ -90,7 +103,16 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
       ctx.postMessage({ type: 'search', request: m.request, hits: sim ? sim.search(m.query) : [] });
       break;
     case 'state':
-      if (sim) ctx.postMessage({ type: 'state', state: sim.serialize(), request: m.request });
+      postState(m.request);
+      break;
+    case 'skip':
+      if (sim && !skip) {
+        skip = { from: sim.state.time, until: sim.state.time + m.seconds, stride: sim.state.stride };
+        sim.setStride(30); // coarsest, aggregated simulation while leaping through time
+      }
+      break;
+    case 'cancelSkip':
+      endSkip();
       break;
     case 'stop':
       sim = null;
@@ -99,19 +121,40 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
   }
 };
 
+function endSkip(): void {
+  if (!skip || !sim) return;
+  sim.setStride(skip.stride);
+  skip = null;
+  budget = 0;
+  ctx.postMessage({ type: 'skip', done: true, progress: 1, time: sim.state.time });
+  postState(0);
+}
+
 setInterval(() => {
   const now = performance.now();
   const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
   if (!sim) return;
-  budget += dt * rate;
   let ticks = 0;
+  if (skip) {
+    // leap through time: as many steps as fit in the slice, leaving room for messages
+    while (sim.state.time < skip.until && performance.now() - now < 26) {
+      sim.step();
+      ticks++;
+    }
+    stepMs = ticks ? (performance.now() - now) / ticks : stepMs;
+    ctx.postMessage({ type: 'skip', done: false, progress: (sim.state.time - skip.from) / (skip.until - skip.from), time: sim.state.time });
+    if (sim.state.time >= skip.until) endSkip();
+  } else {
+    budget += dt * rate;
+  }
   const stepSeconds = TICK_SECONDS * sim.state.stride;
-  while (budget >= stepSeconds && performance.now() - now < 14) {
+  while (!skip && budget >= stepSeconds && performance.now() - now < 14) {
     sim.step();
     budget -= stepSeconds;
     ticks++;
   }
+  if (!skip && ticks) stepMs = stepMs * 0.9 + ((performance.now() - now) / ticks) * 0.1;
   // If the device cannot keep up with the requested speed, time simply flows slower.
   const lagging = budget > stepSeconds * 4;
   if (lagging) budget = 0;
@@ -132,16 +175,17 @@ setInterval(() => {
     lastWorld = now;
     ctx.postMessage({ type: 'world', world: sim.worldView() });
   }
-  if (ticks > 0 || now - lastSnapshot > 500) {
+  if ((ticks > 0 && (!skip || now - lastSnapshot > 400)) || now - lastSnapshot > 500) {
     lastSnapshot = now;
     postSnapshot(lagging);
+    ctx.postMessage({ type: 'load', stepMs, stride: sim.state.stride, people: sim.state.persons.length });
   }
   if (watch && now - lastDetail > 400) {
     lastDetail = now;
     ctx.postMessage({ type: 'detail', id: watch, view: sim.view(watch) });
   }
-  if (now - lastState > 10000) {
+  if (now - lastState > 10000 && !skip) {
     lastState = now;
-    ctx.postMessage({ type: 'state', state: sim.serialize(), request: 0 });
+    postState(0);
   }
 }, 33);

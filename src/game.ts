@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { Engine } from './render/engine';
-import { SimClock, SECONDS_PER_DAY, SPEEDS, dateOf, seasonPhase } from './sim/clock';
+import { SimClock, SECONDS_PER_DAY, SECONDS_PER_YEAR, SPEEDS, dateOf, seasonPhase } from './sim/clock';
 import { layoutHamlet, type Building, type Settlement } from './sim/settlements';
-import { SimClient } from './sim/simClient';
+import { SimClient, type StateText } from './sim/simClient';
 import { buildSimSite, foundingBuildings, siteFrame } from './sim/sites';
 import { SIM_STATE_VERSION, type SimState } from './sim/types';
 import { Rng, hashString } from './core/rng';
@@ -51,6 +51,7 @@ export class Game {
   private visualDay = 0;
   private worldSum = 0;
   private lastAutosave = 0;
+  private lastOccupancy = 0;
   running = false;
   /** The living society, in its own thread. */
   readonly sim = new SimClient();
@@ -156,10 +157,23 @@ export class Game {
       // The simulation thread owns time; between its snapshots we extrapolate briefly for smooth light.
       const ahead = Math.min(0.3, (performance.now() - sim.snapshotAt) / 1000) * (sim.lagging ? 0 : rate);
       this.clock.time = Math.max(this.clock.time, snap.time + ahead);
-      if (rate <= MAX_SYNCED_RATE) this.visualDay = this.clock.time / SECONDS_PER_DAY;
+      if (this.sim.skipping !== null) {
+        this.clock.time = snap.time; // leaping: follow the simulation, the sky only drifts
+        this.visualDay += dt / FAST_VISUAL_DAY_SECONDS;
+      } else if (rate <= MAX_SYNCED_RATE) this.visualDay = this.clock.time / SECONDS_PER_DAY;
       else this.visualDay += dt / FAST_VISUAL_DAY_SECONDS; // at blurring speeds the sky only drifts
     }
     if (this.running && performance.now() - this.lastAutosave > 30000) void this.autosave();
+    if (performance.now() - this.lastOccupancy > 3000) {
+      // hearths smoke only where someone actually lives or works
+      this.lastOccupancy = performance.now();
+      const ids = new Set<number>();
+      for (const r of sim.roster) {
+        if (r.home) ids.add(r.home);
+        if (r.workplace) ids.add(r.workplace);
+      }
+      this.engine.buildings.setOccupied(ids);
+    }
 
     const e = this.engine;
     if (this.world) e.people.update(this.world, snap, sim.rosterById, e.camera.position, dt, rate);
@@ -298,6 +312,26 @@ export class Game {
       }
       marks.push({ dir: s.dir, radius, color, strength });
     }
+    if (this.atlasMode === 'trade') {
+      // the routes are drawn from the goods that really travelled, bead by bead along the great circle
+      marks.length = 0;
+      let top = 1;
+      for (const r of w.routes) top = Math.max(top, r[2]);
+      for (const [from, to, qty] of w.routes) {
+        const a = this.settlements.find((x) => x.id === from), b = this.settlements.find((x) => x.id === to);
+        if (!a || !b) continue;
+        const angle = Math.acos(Math.max(-1, Math.min(1, a.dir.x * b.dir.x + a.dir.y * b.dir.y + a.dir.z * b.dir.z)));
+        const steps = Math.max(2, Math.ceil((angle * this.world.R) / 22));
+        const width = 14 + 22 * Math.sqrt(qty / top);
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps, sa = Math.sin((1 - t) * angle) / Math.sin(angle), sb = Math.sin(t * angle) / Math.sin(angle);
+          const dir = { x: a.dir.x * sa + b.dir.x * sb, y: a.dir.y * sa + b.dir.y * sb, z: a.dir.z * sa + b.dir.z * sb };
+          const sea = this.world.elevationAt(dir.x, dir.y, dir.z) <= 0;
+          marks.push({ dir, radius: width, color: sea ? 0x5ec8e0 : 0xffd166, strength: 1, sea });
+        }
+      }
+      for (const s of this.settlements) if (w.settlements[s.id]?.[1]) marks.push({ dir: s.dir, radius: 70, color: 0x8a7a5a, strength: 0.9 });
+    }
     this.engine.setPoliticalOverlay(this.atlasMode, marks);
   }
 
@@ -371,6 +405,13 @@ export class Game {
     return result;
   }
 
+  /** Leaps forward by a number of years, as fast as the device can simulate them. */
+  skipYears(years: number): void {
+    if (!this.world || !this.running) return;
+    this.governor.hold(performance.now(), 5000);
+    this.sim.skip(years * SECONDS_PER_YEAR);
+  }
+
   /** Starts or stops the flow of time (the title screen and cinematics keep the world frozen). */
   setRunning(running: boolean): void {
     this.running = running;
@@ -408,7 +449,7 @@ export class Game {
 
   // ------------------------------------------------------------ persistence
   /** Builds a save from a simulation state (the state carries the authoritative time). */
-  snapshot(slot: string, state: SimState | null = this.sim.lastState): SaveData {
+  snapshot(slot: string, state: StateText | null = this.sim.lastState): SaveData {
     if (!this.world) throw new Error('Aucun monde à sauvegarder');
     const time = state?.time ?? this.clock.time;
     return {
@@ -422,7 +463,8 @@ export class Game {
       simTime: time,
       speedIndex: this.clock.speedIndex,
       camera: this.engine.controls.getState(),
-      sim: state,
+      sim: null,
+      simJson: state?.json ?? null,
       worldEdits: this.worldEdits,
     };
   }
