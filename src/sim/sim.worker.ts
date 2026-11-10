@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { TICK_SECONDS } from './clock';
 import { Simulation } from './simulation';
+import { applyDivine, type DivineAct } from './divine';
 import type { FoundingBuilding, SimSite, SimState } from './types';
 
 /**
@@ -15,6 +16,8 @@ export type ToWorker =
   | { type: 'watch'; id: number }
   | { type: 'state'; request: number }
   | { type: 'search'; request: number; query: string }
+  | { type: 'divine'; request: number; act: DivineAct }
+  | { type: 'site'; site: SimSite }
   | { type: 'stop' };
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -64,6 +67,16 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
     case 'watch':
       watch = m.id;
       lastDetail = 0;
+      break;
+    case 'divine': {
+      const result = sim ? applyDivine(sim, m.act) : { ok: false, reason: 'Monde absent', deaths: 0, destroyed: 0 };
+      ctx.postMessage({ type: 'divine', request: m.request, result });
+      lastWorld = 0;
+      lastEconomy = 0;
+      break;
+    }
+    case 'site':
+      sim?.replaceSite(m.site);
       break;
     case 'search':
       ctx.postMessage({ type: 'search', request: m.request, hits: sim ? sim.search(m.query) : [] });

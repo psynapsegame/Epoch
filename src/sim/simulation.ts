@@ -3,6 +3,7 @@ import { clamp01 } from '../core/math';
 import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour, seasonPhase } from './clock';
 import { addResearch, contact, foundCivilization, onDeath } from './civilization';
 import { BUILD_COST, ageAt, countKind, dailyUpdate, isAdult, stockTargets, updatePrices, workOnProject } from './economy';
+import { marksOf } from './divine';
 import { BASE_MODS, modsFor, type Mods } from './tech';
 import { armiesStep, atWar, relationOf } from './war';
 import { cellOf, findPath, isWalkable, nearestWalkable } from './pathfinding';
@@ -71,6 +72,15 @@ export class Simulation {
 
   constructor(sites: SimSite[], state: SimState) {
     this.state = state;
+    // fields added by later phases get neutral defaults in older states
+    state.divine ??= { energy: 100, acts: 0 };
+    for (const st of state.settlements) {
+      st.droughtUntil ??= 0;
+      st.stormUntil ??= 0;
+      st.blessedUntil ??= 0;
+      st.protectedUntil ??= 0;
+      st.gameUntil ??= 0;
+    }
     this.rng = new Rng(0);
     this.rng.state = state.rng;
     for (const s of sites) {
@@ -105,13 +115,15 @@ export class Simulation {
         stock[R.Stone] = 18;
         stock[R.Tools] = 3;
       }
-      return { id: s.id, stock, prices: [...BASE_PRICE], treasury: pop ? 250 : 0, forage: 1e9, harvest: 1, projects: [], hungryDays: 0, civ: 0, founded: time, origin: 0, besiegedUntil: 0 };
+      return { id: s.id, stock, prices: [...BASE_PRICE], treasury: pop ? 250 : 0, forage: 1e9, harvest: 1, projects: [], hungryDays: 0, civ: 0, founded: time, origin: 0, besiegedUntil: 0,
+        droughtUntil: 0, stormUntil: 0, blessedUntil: 0, protectedUntil: 0, gameUntil: 0,
+      };
     });
     const events: SimEvent[] = settlements.filter((st) => st.treasury > 0).map((st) => ({ t: time, type: 'founded' as const, settlement: st.id }));
     const state: SimState = {
       version: SIM_STATE_VERSION, time, tick: 0, rng: rng.fork('simulation').state, nextId: founders.nextId,
       persons: founders.persons, households: founders.households, dead: [],
-      buildings, settlements, events, civs: [], religions: [], relations: [], wars: [], armies: [], nextBuildingId: buildings.length + 1, stride: 1,
+      buildings, settlements, events, civs: [], religions: [], relations: [], wars: [], armies: [], divine: { energy: 100, acts: 0 }, nextBuildingId: buildings.length + 1, stride: 1,
     };
     const sim = new Simulation(sites, state);
     for (const st of settlements) {
@@ -225,6 +237,26 @@ export class Simulation {
       if (b) this.homeDoor.set(h.id, snap(this.doorOf(b)));
     }
     this.buildingsVersion++;
+  }
+
+  /** Drops a destroyed building from the indexes (the caller removes it from the state). */
+  forgetBuilding(b: SimBuilding): void {
+    this.buildings.delete(b.id);
+    this.bySite.set(b.settlement, (this.bySite.get(b.settlement) ?? []).filter((x) => x !== b));
+    this.buildingsVersion++;
+  }
+
+  /** The land around a settlement was reshaped (divine terrain edit): take the new map. */
+  replaceSite(site: SimSite): void {
+    if (!this.baseSites.has(site.id)) return;
+    this.baseSites.set(site.id, site);
+    this.sites.set(site.id, { ...site, walk: new Uint8Array(site.walk) });
+    this.refreshSite(site.id);
+  }
+
+  /** Harvest factor in force: the year's luck, crushed by a drought. */
+  harvestOf(st: SettlementState): number {
+    return st.harvest * (st.droughtUntil > this.state.time ? 0.4 : 1);
   }
 
   addBuilding(f: FoundingBuilding, progress: number, res = -1): SimBuilding {
@@ -550,7 +582,7 @@ export class Simulation {
         const cap = this.forageCapacity(site.id);
         // the wild only gives so much: over-gathered land yields less
         const abundance = Math.max(0.15, Math.min(1, st.forage / (cap * 0.5 + 1e-6))) * (st.besiegedUntil > t ? 0.3 : 1); // the besieged dare not roam
-        const got = (0.8 + 2.8 * q * (0.5 + p.skills[J.Gatherer])) * (0.85 + 0.3 * rng.next()) * this.seasonFactor(site) * abundance * this.mods(site.id).forage;
+        const got = (0.8 + 2.8 * q * (0.5 + p.skills[J.Gatherer])) * (0.85 + 0.3 * rng.next()) * this.seasonFactor(site) * abundance * this.mods(site.id).forage * (st.stormUntil > t ? 0.3 : 1);
         st.forage = Math.max(0, st.forage - got);
         p.carry = got;
         p.carryRes = R.Food;
@@ -716,10 +748,10 @@ export class Simulation {
         const c = cellOf(site, b.e, b.n);
         const soil = c >= 0 ? site.fertility[c] / 255 : 0.4;
         const mill = this.cache.get(site.id)?.windmill ? 1.15 : 1;
-        return { res: R.Food, qty: credit(4.2 * soil * this.seasonFactor(site) * st.harvest * skill * vary * mill * this.toolBonus(st) * m.farm * m.haul) };
+        return { res: R.Food, qty: credit(4.2 * soil * this.seasonFactor(site) * this.harvestOf(st) * skill * vary * mill * this.toolBonus(st) * m.farm * m.haul) };
       }
       case J.Herder: return b ? { res: R.Food, qty: credit(2.5 * skill * vary * (0.7 + 0.3 * this.seasonFactor(site))) } : null;
-      case J.Fisher: return b ? { res: R.Food, qty: credit(2.9 * skill * vary * m.fish) } : null;
+      case J.Fisher: return b ? { res: R.Food, qty: credit(2.9 * skill * vary * m.fish * (st.stormUntil > this.state.time ? 0.2 : 1)) } : null;
       case J.Woodcutter: {
         const c = cellOf(site, p.e, p.n);
         const density = c >= 0 ? site.wood[c] / 255 : 0.3;
@@ -1375,7 +1407,7 @@ export class Simulation {
           if (c.goods * left > st.stock[R.Goods] + 0.5) missing.push(R.Goods);
           return { id, kind: b.kind, progress: b.progress, missing };
         }),
-        buildings: countKindAll(list), housing, civ: st.civ, origin: st.origin, besieged: st.besiegedUntil > s.time,
+        buildings: countKindAll(list), housing, civ: st.civ, origin: st.origin, besieged: st.besiegedUntil > s.time, marks: marksOf(st, s.time),
       };
     });
     return { settlements, events: s.events.slice(-60) };
@@ -1514,6 +1546,7 @@ export class Simulation {
         return { id: a.id, civ: a.civ, home: a.home, target: a.target, state: a.state, size: a.members.length, e: p?.e ?? 0, n: p?.n ?? 0 };
       }),
       events: s.events.slice(-500),
+      divine: { ...s.divine },
     };
   }
 

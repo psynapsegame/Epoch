@@ -1,5 +1,12 @@
 import { dateOf } from './clock';
+import { POWERS, type DivinePower } from './divine';
 import { TECH_BY_ID } from './tech';
+
+const OMEN_NAMES: Record<string, string> = {
+  mountain: 'la montagne surgie de terre', valley: 'la terre qui s’est ouverte', forest: 'la forêt née en une nuit', deposit: 'le filon apparu',
+  meteor: 'la pierre tombée du ciel', fire: 'le grand incendie', drought: 'la sécheresse', storm: 'la tempête', animals: 'les troupeaux venus de nulle part',
+  blessing: 'la guérison de tous', harvest: 'la récolte miraculeuse', blight: 'les champs flétris', protect: 'la main étendue sur eux', hero: 'l’enfant du prodige',
+};
 import { GOVERNMENT_LABELS, JOB_LABELS_F, JOB_LABELS_M, RESOURCE_LABELS, WAR_CAUSE_LABELS, type Government, type Memory, type SimEvent, type WarCause } from './types';
 
 export const TRADITION_NAMES: Record<string, string> = {
@@ -17,7 +24,7 @@ export function eventText(e: SimEvent, place: (id: number) => string): string {
   switch (e.type) {
     case 'founded': return `Fondation de ${place(e.settlement)}`;
     case 'birth': return `Naissance de ${n[0]}, enfant de ${n[1]}`;
-    case 'death': return `Mort de ${n[0]} à ${e.value} ans (${e.what === 'age' ? 'vieillesse' : e.what === 'thirst' ? 'soif' : e.what === 'battle' ? 'au combat' : 'faim'})`;
+    case 'death': return `Mort de ${n[0]} à ${e.value} ans (${e.what === 'age' ? 'vieillesse' : e.what === 'thirst' ? 'soif' : e.what === 'battle' ? 'au combat' : e.what === 'disaster' ? 'dans le fléau' : 'faim'})`;
     case 'marriage': return `Union de ${n[0]} et ${n[1]}`;
     case 'project': return `Chantier ouvert : ${(BUILDING_NAMES[String(e.what)] ?? '').toLowerCase()}`;
     case 'built': return `${BUILDING_NAMES[String(e.what)] ?? 'Bâtiment'} achevé${n[0] ? ` (dernière pierre posée par ${n[0]})` : ''}`;
@@ -41,6 +48,20 @@ export function eventText(e: SimEvent, place: (id: number) => string): string {
     case 'battle': return `Bataille de ${place(e.settlement)} : ${e.what === 'attackers' ? `victoire de ${n[0]}` : `${n[1]} repousse ${n[0]}`} (${e.value} morts)`;
     case 'conquest': return `${place(e.settlement)} tombe aux mains de ${n[0]}`;
     case 'secession': return e.what === 'return' ? `${place(e.settlement)} se soulève contre ${n[1]} et rejoint ${n[0]}` : `${place(e.settlement)} rompt avec ${n[1]} et fonde son propre peuple`;
+    case 'divine': return `Intervention divine : ${POWERS[e.what as DivinePower]?.name.toLowerCase() ?? e.what}${e.settlement ? ` sur ${place(e.settlement)}` : ''}${e.value ? ` — ${e.value} morts` : ''}${n[0] ? ` (${n[0]})` : ''}`;
+    case 'omen': {
+      const [power, reading] = String(e.what).split(':');
+      const what = OMEN_NAMES[power] ?? 'le prodige';
+      const faith = n[1] ? ` de ${n[1]}` : '';
+      switch (reading) {
+        case 'founding': return `Devant ${what}, les ${n[0]} se donnent une croyance : ${n[1]}`;
+        case 'wonder': return `Les ${n[0]} restent sans voix devant ${what}`;
+        case 'favour': return `Les ${n[0]} voient dans ${what} la faveur${faith} : la ferveur s’embrase`;
+        case 'grace': return `Les ${n[0]} rendent grâce pour ${what}`;
+        case 'wrath': return `Les ${n[0]} tremblent : ${what} est la colère${faith}`;
+        default: return `Les ${n[0]} ne comprennent pas ${what} : le doute gagne les fidèles${faith}, le dirigeant est blâmé`;
+      }
+    }
     case 'festival': return `Grande fête : ${TRADITION_NAMES[String(e.what)] ?? 'réjouissances'}`;
     default: return '';
   }
@@ -81,6 +102,8 @@ export function memoryText(m: Memory, names: Record<number, string>, female: boo
     case 'battle': return `Combat à la bataille de ${m.place}`;
     case 'wounded': return `Blessé${e} au combat`;
     case 'conquered': return `Voit sa terre passer sous la loi de ${m.place}`;
+    case 'omen': return `Témoin d’un prodige : ${OMEN_NAMES[String(m.what)] ?? 'un signe'}`;
+    case 'chosen': return `Touché${e} par une grâce venue d’ailleurs : des dons hors du commun`;
     case 'discoveryTech': return `Ses travaux aboutissent : ${TECH_BY_ID.get(String(m.what))?.name ?? m.what}`;
     default: return '';
   }

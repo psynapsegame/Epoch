@@ -268,7 +268,8 @@ export function armiesStep(sim: Simulation): void {
       if (!war || war.end) { st.besiegedUntil = 0; sendHome(sim, army); }
       else if (t >= st.besiegedUntil) beginBattle(sim, army);
     } else if (army.state === 'battle') {
-      const fortified = countKind(sim.buildingsOf(st.id), 'watchtower') > 0 ? 1.4 : 1.15;
+      // home ground, walls of a watchtower, and the hand of the heavens over a protected people
+      const fortified = (countKind(sim.buildingsOf(st.id), 'watchtower') > 0 ? 1.4 : 1.15) * (st.protectedUntil > t ? 2.5 : 1);
       while (t >= army.nextRound && army.state === 'battle') {
         army.nextRound += ROUND;
         const A = fighters(sim, army.members), D = fighters(sim, army.defenders);

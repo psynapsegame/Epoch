@@ -1,3 +1,4 @@
+import type { DivineAct, DivineResult } from './divine';
 import type { ToWorker } from './sim.worker';
 import type { EconomyView, FoundingBuilding, PersonView, RosterEntry, SearchHit, SimBuilding, SimSite, SimState, Snapshot, WorldView } from './types';
 
@@ -20,6 +21,7 @@ export class SimClient {
   world: WorldView | null = null;
   onWorld: (() => void) | null = null;
   private searches = new Map<number, (h: SearchHit[]) => void>();
+  private divines = new Map<number, (r: DivineResult) => void>();
   onRoster: (() => void) | null = null;
   onBuildings: (() => void) | null = null;
   onDetail: ((id: number, view: PersonView | null) => void) | null = null;
@@ -49,6 +51,10 @@ export class SimClient {
         case 'world':
           this.world = m.world as WorldView;
           this.onWorld?.();
+          break;
+        case 'divine':
+          this.divines.get(m.request)?.(m.result);
+          this.divines.delete(m.request);
           break;
         case 'search':
           this.searches.get(m.request)?.(m.hits);
@@ -95,6 +101,20 @@ export class SimClient {
   /** Subscribes to live details of one person (0 = none). */
   watch(id: number): void {
     this.send({ type: 'watch', id });
+  }
+
+  /** Carries out a divine intervention in the simulation and reports what it did. */
+  divine(act: DivineAct): Promise<DivineResult> {
+    return new Promise((resolve) => {
+      const request = this.nextRequest++;
+      this.divines.set(request, resolve);
+      this.send({ type: 'divine', request, act });
+    });
+  }
+
+  /** Sends the reshaped land around a settlement (after a divine terrain edit). */
+  replaceSite(site: SimSite): void {
+    this.send({ type: 'site', site });
   }
 
   /** Looks up people by name among the living and the dead (archives). */

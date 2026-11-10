@@ -221,10 +221,10 @@ function focusFor(sim: Simulation, st: SettlementState): string {
   return options[Math.floor(sim.rng.next() * options.length)];
 }
 
-function foundReligion(sim: Simulation, civ: Civilization, prophet: Person, parent: number): Religion {
+export function foundReligion(sim: Simulation, civ: Civilization, prophet: Person, parent: number, forced?: string): Religion {
   const s = sim.state;
   const st = sim.settlement(prophet.settlement)!;
-  let focus = focusFor(sim, st);
+  let focus = forced ?? focusFor(sim, st);
   const parentRel = s.religions.find((r) => r.id === parent);
   if (parentRel && focus === parentRel.focus) focus = focus === 'ancestors' ? 'stars' : 'ancestors';
   const names = FOCUS_NAMES[focus];

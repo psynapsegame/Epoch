@@ -6,7 +6,7 @@ joueur-divinité. Paysage, tactile, hors ligne.
 
 > « Avant les royaumes, avant les guerres, avant les légendes, il n’existait qu’un monde. »
 
-Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 5 — les conflits.**
+Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 6 — les pouvoirs divins.**
 
 ## Lancer
 
@@ -104,7 +104,16 @@ Détails : [docs/CIVILIZATIONS.md](docs/CIVILIZATIONS.md).
 
 Détails : [docs/WAR.md](docs/WAR.md).
 
-Les sections Chroniques et Divinité sont
-verrouillées dans l’interface tant que leurs systèmes n’existent pas : aucune donnée fictive n’est affichée.
+## Ce que contient la phase 6
+
+- **14 pouvoirs divins** : bénir, protéger, susciter un être d’exception, faire naître une forêt ou un
+  gisement, élever une montagne, creuser une vallée, déchaîner tempête, sécheresse, incendie, météorite…
+- Chaque acte change réellement la planète ou la société, de façon durable et sauvegardée.
+- Les peuples **interprètent** ces prodiges selon leurs croyances : ferveur, doute, naissance d’un culte.
+
+Détails : [docs/DIVINITY.md](docs/DIVINITY.md).
+
+La section Chroniques est verrouillée dans l’interface tant que son système n’existe pas : aucune
+donnée fictive n’est affichée.
 
 Architecture détaillée : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

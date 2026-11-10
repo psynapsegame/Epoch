@@ -133,13 +133,22 @@ export function foundingBuildings(world: World, settlements: Settlement[], build
 }
 
 /** Unit direction on the planet of a local (east, north) position of a settlement. */
-export function siteFrame(settlement: Settlement): { toDir: (e: number, n: number, R: number, out: { x: number; y: number; z: number }) => void } {
+export function siteFrame(settlement: Settlement): {
+  toDir: (e: number, n: number, R: number, out: { x: number; y: number; z: number }) => void;
+  /** Local (east, north) metres of a direction on the planet (gnomonic projection). */
+  toLocal: (dir: { x: number; y: number; z: number }, R: number) => { e: number; n: number };
+} {
   const { c, east, north } = frameOf(settlement);
   return {
     toDir(e, n, R, out) {
       const x = c.x + (east.x * e + north.x * n) / R, y = c.y + (east.y * e + north.y * n) / R, z = c.z + (east.z * e + north.z * n) / R;
       const l = Math.hypot(x, y, z);
       out.x = x / l; out.y = y / l; out.z = z / l;
+    },
+    toLocal(dir, R) {
+      const dot = Math.max(0.05, dir.x * c.x + dir.y * c.y + dir.z * c.z);
+      const qx = dir.x / dot - c.x, qy = dir.y / dot - c.y, qz = dir.z / dot - c.z;
+      return { e: (qx * east.x + qy * east.y + qz * east.z) * R, n: (qx * north.x + qy * north.y + qz * north.z) * R };
     },
   };
 }

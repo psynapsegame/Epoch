@@ -10,6 +10,8 @@ import type { WorldData } from '../world/types';
 import { AtmospherePass } from './atmospherePass';
 import { BuildingsLayer } from './buildingsLayer';
 import { CameraController } from './cameraController';
+import { DivineFx } from './divineFx';
+import { applyEdit, type WorldEdit } from '../world/edits';
 import { PeopleLayer } from './peopleLayer';
 import { createTreeAssets, type TreeAssets } from './models/trees';
 import { createOcean } from './ocean';
@@ -70,6 +72,9 @@ export class Engine {
   private treeAssets: TreeAssets = createTreeAssets();
   readonly buildings = new BuildingsLayer();
   readonly people = new PeopleLayer();
+  readonly fx = new DivineFx();
+  /** Seconds of stormy sky left to show (cosmetic). */
+  private stormTime = 0;
   private planet = new THREE.Group();
   private atlasTex: THREE.DataTexture | null = null;
   private atlasMode: AtlasMode = 'none';
@@ -102,7 +107,7 @@ export class Engine {
     this.scene.add(this.stars);
     this.scene.add(this.planet);
     this.planet.visible = false;
-    this.planet.add(this.ocean, this.clouds, this.buildings.group, this.people.group);
+    this.planet.add(this.ocean, this.clouds, this.buildings.group, this.people.group, this.fx.group);
 
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0004;
@@ -229,6 +234,33 @@ export class Engine {
     return world;
   }
 
+  /**
+   * A divine edit reshaped the planet: update the world grid, the GPU
+   * textures derived from it, the terrain chunks and the vegetation.
+   */
+  applyWorldEdit(edit: WorldEdit): void {
+    const world = this.world;
+    if (!world || !this.terrain) return;
+    applyEdit(world.data, edit);
+    U.uTexA.value?.dispose();
+    U.uTexB.value?.dispose();
+    const { texA, texB } = buildWorldTextures(world.data);
+    texA.anisotropy = texB.anisotropy = this.profile.textureAnisotropy;
+    U.uTexA.value = texA;
+    U.uTexB.value = texB;
+    const dir = new THREE.Vector3();
+    world.cellDir(edit.x, edit.y, dir);
+    this.terrain.invalidate(dir.clone().multiplyScalar(world.R), edit.radius);
+    this.terrain.refreshTrees();
+    this.buildings.invalidate();
+    if (this.atlasMode !== 'none' && this.atlasTex && !['borders', 'population', 'religions', 'wars'].includes(this.atlasMode)) buildAtlasTexture(world.data, this.atlasMode, this.atlasTex);
+  }
+
+  /** Darkens the sky for a while (storms). */
+  storm(seconds: number): void {
+    this.stormTime = seconds;
+  }
+
   /** Mirrors the simulation's buildings into the scene. */
   syncBuildings(buildings: Building[]): void {
     if (!this.world || !this.terrain) return;
@@ -308,6 +340,10 @@ export class Engine {
     U.uSunDir.value.set(Math.cos(decl) * Math.cos(hourAngle), Math.sin(decl), Math.cos(decl) * Math.sin(hourAngle)).normalize();
     this.stars.quaternion.setFromAxisAngle(Y, -hourAngle);
     U.uCloudShift.value = (U.uTime.value * 0.0006) % 1;
+    this.stormTime = Math.max(0, this.stormTime - dt);
+    const cover = this.stormTime > 0 ? 0.82 : 0.44;
+    U.uCloudCover.value += (cover - U.uCloudCover.value) * Math.min(1, dt * 0.8);
+    this.fx.update(dt);
 
     this.controls.update(dt);
     const cam = this.camera;

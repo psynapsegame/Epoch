@@ -73,7 +73,7 @@ describe('historical clock', () => {
 describe('save format', () => {
   const save: SaveData = {
     version: SAVE_VERSION, slot: 'slot1', name: 'test', savedAt: 123, seed: 'Aurore-1234', worldWidth: 2048,
-    worldChecksum: 99, simTime: 1e7, speedIndex: 2, camera: { dir: [1, 0, 0], distance: 500, heading: 0.3, tilt: 1 }, sim: null,
+    worldChecksum: 99, simTime: 1e7, speedIndex: 2, camera: { dir: [1, 0, 0], distance: 500, heading: 0.3, tilt: 1 }, sim: null, worldEdits: [],
   };
   it('round-trips through export / import', () => {
     expect(importSave(exportSave(save))).toEqual(save);

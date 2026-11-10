@@ -125,3 +125,59 @@ describe('World query API', () => {
     expect(world.seasonalTemperature(north, 1)).toBeGreaterThan(world.seasonalTemperature(north, -1));
   });
 });
+
+import { applyEdit, applyEdits, type WorldEdit } from '../src/world/edits';
+
+describe('divine world edits', () => {
+  const fresh = () => generateWorld({ seed: 'test-world', width: 512 });
+  const site = (w: ReturnType<typeof fresh>) => w.sites[0];
+
+  it('raise a mountain that is higher, colder and deterministic', () => {
+    const a = fresh(), b = fresh();
+    const s = site(a);
+    const i = s.y * a.width + s.x;
+    const before = a.elevation[i], temp = a.temperature[i];
+    const edit: WorldEdit = { kind: 'mountain', x: s.x, y: s.y, radius: 250, amount: 180 };
+    applyEdit(a, edit);
+    applyEdit(b, edit);
+    expect(a.elevation[i]).toBeGreaterThan(before + 100);
+    expect(a.temperature[i]).toBeLessThan(temp - 4);
+    expect(worldChecksum(a)).toBe(worldChecksum(b));
+    // far away, nothing moved
+    const far = ((s.y + 60) % a.height) * a.width + ((s.x + 200) % a.width);
+    expect(a.elevation[far]).toBe(fresh().elevation[far]);
+  });
+
+  it('grow forests, seed deposits, dig craters and burn woods', () => {
+    const w = fresh();
+    const s = site(w);
+    const i = s.y * w.width + s.x;
+    applyEdit(w, { kind: 'forest', x: s.x, y: s.y, radius: 200, amount: 0 });
+    expect(w.forest[i]).toBeGreaterThan(150);
+    applyEdit(w, { kind: 'burn', x: s.x, y: s.y, radius: 200, amount: 0 });
+    expect(w.forest[i]).toBeLessThan(60);
+    expect(w.volcanic[i]).toBeGreaterThan(40);
+    applyEdit(w, { kind: 'deposit', x: s.x, y: s.y, radius: 80, amount: 1 });
+    expect(w.mineral[i] >> 4).toBe(1);
+    expect(w.mineral[i] & 15).toBeGreaterThan(10);
+    const h = w.elevation[i];
+    applyEdit(w, { kind: 'crater', x: s.x, y: s.y, radius: 90, amount: 14 });
+    expect(w.elevation[i]).toBeLessThan(h);
+    expect(w.elevation[i]).toBeGreaterThan(0);
+    applyEdit(w, { kind: 'valley', x: s.x, y: s.y, radius: 150, amount: 500 });
+    expect(w.elevation[i]).toBeCloseTo(0.8, 5); // never below the shoreline
+  });
+
+  it('replay identically from a list (save / load)', () => {
+    const edits: WorldEdit[] = [
+      { kind: 'mountain', x: 100, y: 120, radius: 300, amount: 150 },
+      { kind: 'forest', x: 140, y: 110, radius: 200, amount: 0 },
+      { kind: 'crater', x: 100, y: 120, radius: 80, amount: 12 },
+    ];
+    const a = fresh(), b = fresh();
+    applyEdits(a, edits);
+    for (const e of edits) applyEdit(b, e);
+    expect(worldChecksum(a)).toBe(worldChecksum(b));
+    expect(worldChecksum(a)).not.toBe(worldChecksum(fresh()));
+  });
+});

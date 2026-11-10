@@ -8,7 +8,7 @@
 | 3 — La civilisation | 10 métiers réels, 8 ressources, stocks, prix et monnaie conservée, commerce entre établissements, chantiers décidés et bâtis par les habitants, unions, naissances, vieillesse, foyers, journal des événements, simulation agrégée aux grandes vitesses, panneau Économie | **Livrée** |
 | 4 — Le monde historique | Peuples, dirigeants réels, successions, dynasties, coups de force, régimes, cultures transmises, croyances (naissance, diffusion, schisme, extinction), 17 technologies aux effets réels, colonisation, journal historique, archives consultables, cartes politiques | **Livrée** |
 | 5 — Les conflits | Relations entre peuples, alliances, causes de guerre, soldats et levées, armées en marche, sièges, batailles par duels, conquêtes et pillage, traités, occupations, soulèvements et sécessions, carte des guerres | **Livrée** |
-| 6 — Les pouvoirs divins | Interventions, catastrophes, réactions et croyances | À venir |
+| 6 — Les pouvoirs divins | 14 pouvoirs aux effets réels et persistants (bienfaits, fléaux, remodelage de la planète), ferveur comme ressource, réactions des peuples selon leurs croyances, modifications du monde sauvegardées et rejouées | **Livrée** |
 | 7 — Les chroniques | Archives, généalogies, récits reliés à leurs événements sources | À venir |
 | 8 — Polissage | Graphismes, animations, performances mobiles (5 000–10 000 individus simulés, rendu agrégé), voie WebGPU, expérience | À venir |
 

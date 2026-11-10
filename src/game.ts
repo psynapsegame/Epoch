@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { Engine } from './render/engine';
 import { SimClock, SECONDS_PER_DAY, SPEEDS, dateOf, seasonPhase } from './sim/clock';
 import { layoutHamlet, type Building, type Settlement } from './sim/settlements';
@@ -14,6 +15,8 @@ import { SAVE_VERSION, saveStore, type SaveData } from './persistence/saveStore'
 import { deviceInfo, initNativeShell, isNative, requestPersistentStorage } from './platform/platform';
 import { CIV_COLORS_HEX, FAITH_COLORS_HEX } from './render/palette';
 import { POLITICAL_MODES, type AtlasMode, type PoliticalMark } from './render/worldTextures';
+import { POWERS, type DivinePower, type DivineResult } from './sim/divine';
+import { applyEdits, type WorldEdit } from './world/edits';
 import { PROFILES, QUALITY_TIERS, QualityGovernor, defaultTier, targetFrameRate, type QualityTier } from './render/quality';
 import { loadSettings, storeSettings, type Settings } from './settings';
 
@@ -54,6 +57,8 @@ export class Game {
   /** Selected inhabitant (0 = none) and whether the camera follows them. */
   selected = 0;
   following = false;
+  /** Divine edits of the planet since its creation (saved, replayed at load). */
+  worldEdits: WorldEdit[] = [];
   /** True when the last loaded save predates the current society rules and was re-founded. */
   refounded = false;
   onTick: (() => void) | null = null;
@@ -164,10 +169,13 @@ export class Game {
   }
 
   /** Generates a brand new world from a seed, and founds its first population. */
-  async createWorld(seed: string, onProgress: (stage: string, stageIndex: number, p: number) => void, saved?: SimState, startTime?: number): Promise<void> {
+  async createWorld(seed: string, onProgress: (stage: string, stageIndex: number, p: number) => void, saved?: SimState, startTime?: number, edits: WorldEdit[] = []): Promise<void> {
     this.sim.setRate(0);
     const data = await generateWorldAsync({ seed, width: DEFAULT_WORLD_WIDTH }, onProgress);
     this.worldSum = worldChecksum(data);
+    // divine changes to the planet are replayed on the freshly generated world
+    applyEdits(data, edits);
+    this.worldEdits = [...edits];
     this.world = this.engine.setWorld(data);
     this.governor.hold(performance.now(), 6000);
     this.clock.speedIndex = 1;
@@ -293,6 +301,76 @@ export class Game {
     this.engine.setPoliticalOverlay(this.atlasMode, marks);
   }
 
+  /** Settlement nearest to a point of the planet, with the point's local coordinates there. */
+  private nearestSettlement(dir: { x: number; y: number; z: number }, inhabitedOnly: boolean, reach: number): { id: number; e: number; n: number; distance: number } | null {
+    if (!this.world) return null;
+    let best: { id: number; e: number; n: number; distance: number } | null = null;
+    for (const s of this.settlements) {
+      if (inhabitedOnly && !(this.sim.world?.settlements[s.id]?.[1] ?? 0)) continue;
+      const d = Math.acos(Math.max(-1, Math.min(1, s.dir.x * dir.x + s.dir.y * dir.y + s.dir.z * dir.z))) * this.world.R;
+      if (d > reach || (best && d >= best.distance)) continue;
+      const local = siteFrame(s).toLocal(dir, this.world.R);
+      best = { id: s.id, e: local.e, n: local.n, distance: d };
+    }
+    return best;
+  }
+
+  /**
+   * A divine intervention at a point of the world. The simulation applies its
+   * consequences on the peoples; powers that reshape the land also edit the
+   * planet itself, lastingly.
+   */
+  async divine(power: DivinePower, point: { x: number; y: number; z: number }): Promise<DivineResult> {
+    const world = this.world;
+    if (!world) return { ok: false, reason: 'Aucun monde', deaths: 0, destroyed: 0 };
+    const def = POWERS[power];
+    const len = Math.hypot(point.x, point.y, point.z);
+    const dir = { x: point.x / len, y: point.y / len, z: point.z / len };
+    const near = this.nearestSettlement(dir, def.target === 'people', def.target === 'people' ? 450 : 1200);
+    const cell = world.cellAt(dir.x, dir.y, dir.z);
+    if (def.target === 'land' && world.data.water[cell] === 1) return { ok: false, reason: 'Ce pouvoir s’exerce sur la terre ferme', deaths: 0, destroyed: 0 };
+    const result = await this.sim.divine({ power, settlement: near?.id ?? 0, e: near?.e ?? 0, n: near?.n ?? 0 });
+    if (!result.ok) return result;
+    void this.sim.requestState(); // so the next autosave already holds the consequences
+
+    const x = cell % world.W, y = (cell / world.W) | 0;
+    const edits: WorldEdit[] =
+      power === 'mountain' ? [{ kind: 'mountain', x, y, radius: def.radius, amount: 170 }]
+      : power === 'valley' ? [{ kind: 'valley', x, y, radius: def.radius, amount: 60 }]
+      : power === 'forest' ? [{ kind: 'forest', x, y, radius: def.radius, amount: 0 }]
+      : power === 'deposit' ? [{ kind: 'deposit', x, y, radius: def.radius, amount: 1 }]
+      : power === 'meteor' ? [{ kind: 'burn', x, y, radius: def.radius * 1.8, amount: 0 }, { kind: 'crater', x, y, radius: def.radius, amount: 12 }]
+      : power === 'fire' ? [{ kind: 'burn', x, y, radius: def.radius, amount: 0 }]
+      : [];
+    const ground = new THREE.Vector3(dir.x, dir.y, dir.z).multiplyScalar(world.surfaceRadius(dir.x, dir.y, dir.z));
+    const centre = near && def.target === 'people' ? this.settlements.find((s) => s.id === near.id)!.dir : dir;
+    const at = def.target === 'people' ? new THREE.Vector3(centre.x, centre.y, centre.z).multiplyScalar(world.surfaceRadius(centre.x, centre.y, centre.z)) : ground;
+    this.engine.fx.spawn(
+      power === 'meteor' ? 'impact' : power === 'fire' ? 'flames' : edits.length ? 'earth' : def.benevolent ? 'light' : 'gloom',
+      at, def.target === 'people' ? 90 : def.radius,
+    );
+    if (power === 'storm') this.engine.storm(30);
+    if (edits.length) {
+      // let the meteor fall before the ground gives way
+      window.setTimeout(() => {
+        if (this.world !== world) return;
+        let reach = 0;
+        for (const e of edits) {
+          this.engine.applyWorldEdit(e);
+          this.worldEdits.push(e);
+          reach = Math.max(reach, e.radius);
+        }
+        // the peoples nearby live on a changed land: send them its new map
+        for (const s of this.settlements) {
+          const d = Math.acos(Math.max(-1, Math.min(1, s.dir.x * dir.x + s.dir.y * dir.y + s.dir.z * dir.z))) * world.R;
+          if (d < reach + 330) this.sim.replaceSite(buildSimSite(world, s, this.settlements));
+        }
+        this.onSimBuildings();
+      }, power === 'meteor' ? 750 : 150);
+    }
+    return result;
+  }
+
   /** Starts or stops the flow of time (the title screen and cinematics keep the world frozen). */
   setRunning(running: boolean): void {
     this.running = running;
@@ -345,6 +423,7 @@ export class Game {
       speedIndex: this.clock.speedIndex,
       camera: this.engine.controls.getState(),
       sim: state,
+      worldEdits: this.worldEdits,
     };
   }
 
@@ -370,7 +449,7 @@ export class Game {
   async load(save: SaveData, onProgress: (stage: string, stageIndex: number, p: number) => void): Promise<{ checksumOk: boolean }> {
     // A save from an earlier phase keeps its world and date; its society is founded anew with the current rules.
     const sim = save.sim && save.sim.version === SIM_STATE_VERSION ? save.sim : undefined;
-    await this.createWorld(save.seed, onProgress, sim, sim ? undefined : save.simTime);
+    await this.createWorld(save.seed, onProgress, sim, sim ? undefined : save.simTime, save.worldEdits);
     this.refounded = !!save.sim && !sim;
     this.clock.speedIndex = Math.max(0, Math.min(SPEEDS.length - 1, save.speedIndex));
     this.engine.controls.setState(save.camera);

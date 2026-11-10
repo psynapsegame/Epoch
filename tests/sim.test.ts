@@ -652,3 +652,138 @@ describe('war and diplomacy', () => {
     expect(r.grievance).toBeLessThan(0.6);
   });
 });
+
+import { POWERS, POWER_ORDER, applyDivine, divineDaily, marksOf } from '../src/sim/divine';
+
+describe('divine interventions', () => {
+  const act = (sim: Simulation, power: keyof typeof POWERS, e = 0, n = 0, settlement = 1) => applyDivine(sim, { power, settlement, e, n });
+
+  it('costs devotion, which believers replenish', () => {
+    const sim = fresh();
+    expect(sim.state.divine.energy).toBe(100);
+    expect(act(sim, 'blessing').ok).toBe(true);
+    expect(sim.state.divine.energy).toBe(100 - POWERS.blessing.cost);
+    sim.state.divine.energy = 3;
+    const refused = act(sim, 'meteor');
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toMatch(/Ferveur/);
+    const before = sim.state.divine.energy;
+    divineDaily(sim);
+    expect(sim.state.divine.energy).toBeGreaterThan(before);
+    for (const p of POWER_ORDER) expect(POWERS[p].cost).toBeGreaterThan(0);
+  });
+
+  it('heals and protects with a blessing', () => {
+    const sim = fresh();
+    const people = sim.state.persons.filter((p) => p.settlement === 1);
+    for (const p of people) { p.health = 0.4; p.needs[N.Food] = 0.1; }
+    act(sim, 'blessing');
+    for (const p of people) { expect(p.health).toBe(1); expect(p.needs[N.Food]).toBeGreaterThanOrEqual(0.9); }
+    expect(marksOf(sim.settlement(1)!, sim.state.time)).toContain('blessed');
+    expect(sim.state.events.some((e) => e.type === 'divine' && e.what === 'blessing')).toBe(true);
+    expect(people.some((p) => p.memories.some((m) => m.type === 'omen'))).toBe(true);
+  });
+
+  it('withers or swells the harvest and the hunt', () => {
+    const sim = fresh();
+    const st = sim.settlement(1)!;
+    const normal = sim.harvestOf(st);
+    act(sim, 'drought');
+    expect(sim.harvestOf(st)).toBeCloseTo(normal * 0.4, 6);
+    expect(marksOf(st, sim.state.time)).toContain('drought');
+    sim.state.divine.energy = 100;
+    act(sim, 'harvest');
+    expect(st.harvest).toBe(1.5);
+    act(sim, 'blight');
+    expect(st.harvest).toBe(0.3);
+    sim.state.divine.energy = 100;
+    st.forage = 0;
+    act(sim, 'animals');
+    expect(st.forage).toBeCloseTo(sim.forageCapacity(1), 6);
+    expect(marksOf(st, sim.state.time)).toContain('game');
+    act(sim, 'storm');
+    expect(marksOf(st, sim.state.time)).toContain('storm');
+  });
+
+  it('kills and destroys where a meteor falls, and nowhere else', () => {
+    const sim = fresh();
+    const pop = sim.state.persons.length, buildings = sim.state.buildings.length;
+    const victim = sim.state.persons.find((p) => p.settlement === 1)!;
+    const home = sim.building(sim.household(victim.household)!.building)!;
+    const res = act(sim, 'meteor', home.e, home.n);
+    expect(res.ok).toBe(true);
+    expect(res.destroyed).toBeGreaterThan(0);
+    expect(sim.building(home.id)).toBeUndefined();
+    expect(sim.state.buildings.length).toBe(buildings - res.destroyed);
+    expect(sim.state.persons.length).toBe(pop - res.deaths);
+    expect(sim.state.dead.filter((d) => d.cause === 'disaster').length).toBe(res.deaths);
+    // the survivors of the household are homeless, and find or build a roof again
+    for (const h of sim.state.households) if (h.settlement === 1) expect(h.building === 0 || sim.building(h.building)).toBeTruthy();
+    expect(sim.state.persons.filter((p) => p.settlement === 2).length).toBeGreaterThan(20);
+    sim.run(TICKS_PER_DAY * 2);
+    expect(sim.state.persons.length).toBeGreaterThan(80);
+  });
+
+  it('burns wooden buildings and leaves them to be repaired', () => {
+    const sim = fresh();
+    const st = sim.settlement(1)!;
+    const house = sim.buildingsOf(1).find((b) => b.kind === 'house')!;
+    const res = act(sim, 'fire', house.e, house.n);
+    expect(res.destroyed).toBeGreaterThan(0);
+    const after = sim.building(house.id);
+    if (after) {
+      expect(after.progress).toBeLessThan(1);
+      expect(st.projects).toContain(house.id);
+    }
+    sim.state.divine.energy = 100;
+    const well = sim.buildingsOf(1).find((b) => b.kind === 'well');
+    if (well) { act(sim, 'fire', well.e, well.n); expect(sim.building(well.id)!.progress).toBe(1); }
+  });
+
+  it('shields a protected people from calamities', () => {
+    const sim = fresh();
+    expect(act(sim, 'protect').ok).toBe(true);
+    const refused = act(sim, 'meteor');
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toMatch(/protection/);
+    expect(act(sim, 'blessing').ok).toBe(true);
+    expect(act(sim, 'meteor', 0, 0, 2).ok).toBe(true);
+  });
+
+  it('raises an exceptional being among the young', () => {
+    const sim = fresh();
+    const res = act(sim, 'hero');
+    expect(res.ok).toBe(true);
+    const hero = sim.person(res.person!)!;
+    expect(hero.traits[T.Intelligence]).toBeGreaterThan(0.9);
+    expect(hero.traits[T.Courage]).toBeGreaterThan(0.9);
+    expect(hero.memories.some((m) => m.type === 'chosen')).toBe(true);
+    expect(sim.state.civs[0].leader).not.toBe(hero.id);
+  });
+
+  it('is read by the peoples through their beliefs', () => {
+    const sim = fresh();
+    const civ = sim.state.civs[0];
+    // without a faith, a sign may found one
+    for (let k = 0; k < 6 && !civ.religion; k++) { sim.state.divine.energy = 100; act(sim, 'harvest'); }
+    expect(civ.religion).toBeGreaterThan(0);
+    const rel = sim.state.religions[civ.religion - 1];
+    expect(rel.focus).toBe('sun');
+    expect(sim.state.events.some((e) => e.type === 'omen')).toBe(true);
+    // a blessing in keeping with the faith kindles fervour; an unexplained calamity breeds doubt
+    rel.fervor = 0.5;
+    sim.state.divine.energy = 100;
+    act(sim, 'harvest');
+    expect(rel.fervor).toBeGreaterThan(0.7);
+    const legit = civ.legitimacy;
+    sim.state.divine.energy = 100;
+    act(sim, 'storm');
+    expect(rel.fervor).toBeLessThan(0.8);
+    expect(civ.legitimacy).toBeLessThan(legit);
+    // the wrath of their own god binds them closer
+    rel.fervor = 0.5;
+    sim.state.divine.energy = 100;
+    act(sim, 'drought');
+    expect(rel.fervor).toBeGreaterThan(0.7);
+  });
+});

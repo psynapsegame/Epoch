@@ -362,6 +362,31 @@ export class PlanetTerrain {
     node.trees = trees;
   }
 
+  /**
+   * The ground changed (divine terrain edit): rebuild every built chunk that
+   * touches the area, at every level of detail, in place.
+   */
+  invalidate(center: THREE.Vector3, radius: number): void {
+    const walk = (node: TerrainNode) => {
+      if (node.center.distanceTo(center) > node.boundRadius + radius + 40) return;
+      if (node.mesh) {
+        const visible = node.mesh.visible;
+        this.group.remove(node.mesh);
+        node.mesh.geometry.dispose();
+        node.mesh = null;
+        this.stats.chunksTotal--;
+        if (node.trees) {
+          for (const t of node.trees) { this.group.remove(t); t.dispose(); }
+          node.trees = null;
+        }
+        this.build(node);
+        node.mesh!.visible = visible;
+      }
+      if (node.children) for (const c of node.children) walk(c);
+    };
+    for (const r of this.roots) walk(r);
+  }
+
   /** Applies new LOD settings; vegetation is replanted if its density changed. */
   setOptions(opts: TerrainOptions): void {
     const replant = opts.treeGrid !== this.opts.treeGrid;

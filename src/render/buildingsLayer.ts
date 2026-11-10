@@ -32,6 +32,11 @@ export class BuildingsLayer {
 
   private signature = '';
 
+  /** Forces the next sync to rebuild every instance (e.g. the ground moved under the buildings). */
+  invalidate(): void {
+    this.signature = '';
+  }
+
   /**
    * Mirrors the simulation's buildings. Returns true when the set of buildings
    * changed (not just their construction progress).

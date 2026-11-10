@@ -2,6 +2,7 @@ import { clamp01 } from '../core/math';
 import { DAYS_PER_YEAR, SECONDS_PER_DAY, SECONDS_PER_YEAR } from './clock';
 import { civilizationsDaily } from './civilization';
 import { atWar, diplomacyDaily, soldierSlots } from './war';
+import { divineDaily } from './divine';
 import { cellOf } from './pathfinding';
 import { dwellingCapacity } from './sites';
 import type { Simulation } from './simulation';
@@ -415,6 +416,16 @@ export function workOnProject(sim: Simulation, st: SettlementState, b: SimBuildi
 export function rehouse(sim: Simulation, st: SettlementState): void {
   const time = sim.state.time;
   const capOf = (h: Household) => dwellingCapacity(sim.building(h.building)?.kind ?? '');
+  // Families without a roof (colonists, victims of a disaster) take the first free home.
+  for (const hh of sim.state.households) {
+    if (hh.settlement !== st.id || sim.building(hh.building)) continue;
+    const free = sim.buildingsOf(st.id).filter((b) => b.progress >= 1 && dwellingCapacity(b.kind) > 0 && !sim.householdOfBuilding(b.id))
+      .sort((a, b) => Math.abs(dwellingCapacity(a.kind) - hh.members.length) - Math.abs(dwellingCapacity(b.kind) - hh.members.length) || a.id - b.id)[0];
+    if (!free) continue;
+    hh.building = free.id;
+    sim.refreshSite(st.id);
+    sim.rosterVersion++;
+  }
   // A family that has outgrown its home moves into a larger vacant one.
   for (const hh of sim.state.households) {
     if (hh.settlement !== st.id || hh.members.length <= capOf(hh)) continue;
@@ -546,14 +557,14 @@ export function lifeCycle(sim: Simulation, st: SettlementState): void {
     const hh = sim.household(w.household)!;
     const cap = dwellingCapacity(sim.building(hh.building)?.kind ?? '');
     if (hh.members.length >= cap + 2) continue; // no room for another child
-    if (rng.next() < 1 / 300) w.pregnantUntil = time + 270 * SECONDS_PER_DAY;
+    if (rng.next() < (1 / 300) * (st.blessedUntil > time ? 1.6 : 1)) w.pregnantUntil = time + 270 * SECONDS_PER_DAY;
   }
 
   // --- old age
   for (const p of people) {
     const age = ageAt(p, time);
     if (age < 55 || p.trip) continue;
-    if (rng.next() < 0.00004 * Math.exp((age - 55) / 7) * sim.mods(st.id).mortality) sim.kill(p, 'age');
+    if (rng.next() < 0.00004 * Math.exp((age - 55) / 7) * sim.mods(st.id).mortality * (st.blessedUntil > time ? 0.5 : 1)) sim.kill(p, 'age');
   }
 }
 
@@ -565,7 +576,7 @@ export function dailyUpdate(sim: Simulation): void {
   for (const st of s.settlements) {
     const { pop } = sim.census(st.id);
     const cap = sim.forageCapacity(st.id);
-    st.forage = Math.min(cap, st.forage + cap * 0.5);
+    st.forage = Math.min(cap, st.forage + cap * 0.5 * (st.droughtUntil > s.time ? 0.4 : 1) * (st.gameUntil > s.time ? 1.8 : 1));
     if (pop === 0) continue;
     st.stock[R.Food] *= 1 - sim.mods(st.id).spoilage; // granary losses: food does not keep forever
     // an idle, overflowing common purse is shared out again among the households
@@ -601,4 +612,5 @@ export function dailyUpdate(sim: Simulation): void {
   }
   civilizationsDaily(sim);
   diplomacyDaily(sim);
+  divineDaily(sim);
 }

@@ -71,7 +71,7 @@ export const SKILL_LABELS = [
 
 export type MemoryType =
   | 'born' | 'settled' | 'married' | 'child' | 'friend' | 'quarrel' | 'discovery' | 'hunger' | 'gift' | 'received' | 'mourning' | 'feast'
-  | 'job' | 'built' | 'journey' | 'home' | 'ruler' | 'deposed' | 'faith' | 'prophet' | 'colonist' | 'discoveryTech' | 'battle' | 'wounded' | 'conquered';
+  | 'job' | 'built' | 'journey' | 'home' | 'ruler' | 'deposed' | 'faith' | 'prophet' | 'colonist' | 'discoveryTech' | 'battle' | 'wounded' | 'conquered' | 'omen' | 'chosen';
 
 export interface Memory {
   /** Simulated time of the event. */
@@ -173,7 +173,7 @@ export interface DeadPerson {
   birth: number;
   birthPlace: string;
   death: number;
-  cause: 'starvation' | 'thirst' | 'age' | 'battle';
+  cause: 'starvation' | 'thirst' | 'age' | 'battle' | 'disaster';
   settlement: number;
   spouse: number;
   parents: [number, number];
@@ -237,12 +237,20 @@ export interface SettlementState {
   origin: number;
   /** End of an ongoing siege (0 = none): the besieged cannot forage far or trade. */
   besiegedUntil: number;
+  /** Lasting marks of divine intervention (simulated end times, 0 = none). */
+  droughtUntil: number;
+  stormUntil: number;
+  blessedUntil: number;
+  protectedUntil: number;
+  /** Abundant game sent by the heavens. */
+  gameUntil: number;
 }
 
 export type SimEventType =
   | 'founded' | 'birth' | 'death' | 'marriage' | 'project' | 'built' | 'famine' | 'harvest' | 'trade' | 'shortage'
   | 'civ' | 'ruler' | 'coup' | 'government' | 'tech' | 'religion' | 'schism' | 'faithEnd' | 'colony' | 'festival'
-  | 'war' | 'peace' | 'alliance' | 'battle' | 'siege' | 'conquest' | 'secession';
+  | 'war' | 'peace' | 'alliance' | 'battle' | 'siege' | 'conquest' | 'secession'
+  | 'divine' | 'omen';
 
 /** A dated fact recorded by the simulation (seed of the future chronicles). */
 export interface SimEvent {
@@ -279,6 +287,8 @@ export interface SimState {
   relations: Relation[];
   wars: War[];
   armies: Army[];
+  /** The player's power to act upon the world, fed by the devotion of the peoples. */
+  divine: { energy: number; acts: number };
   nextBuildingId: number;
   /** Ticks merged per step: 1 = finest; raised at very high speeds (coarser, aggregated simulation). */
   stride: number;
@@ -550,6 +560,8 @@ export interface SettlementView {
   civ: number;
   origin: number;
   besieged: boolean;
+  /** Divine marks currently in force: 'drought' | 'storm' | 'blessed' | 'protected' | 'game'. */
+  marks: string[];
 }
 
 /** Political and cultural picture of the world for the interface. */
@@ -564,6 +576,7 @@ export interface WorldView {
   settlements: Record<number, [number, number]>;
   /** Most recent recorded events of the whole world, oldest first. */
   events: SimEvent[];
+  divine: { energy: number; acts: number };
 }
 
 export interface SearchHit { id: number; name: string; alive: boolean; birth: number; death: number; settlement: number }

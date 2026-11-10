@@ -11,6 +11,7 @@ import { BUILDING_NAMES, TRADITION_NAMES, eventText, formatDate, memoryText } fr
 import { TECHS, TECH_BY_ID } from '../sim/tech';
 import { FAITH_COLORS_HEX, civCss } from '../render/palette';
 import { siteFrame } from '../sim/sites';
+import { POWERS, POWER_ORDER, type DivinePower } from '../sim/divine';
 import {
   ACTIVITY_LABELS, CULTURE_AXES, GOVERNMENT_LABELS, JOB_LABELS_F, JOB_LABELS_M, NEED_LABELS, RESOURCE_LABELS, RULER_TITLES, SKILL_LABELS, TRAIT_LABELS,
   WAR_CAUSE_LABELS, type DeadPerson, type Person, type PersonView, type SimEvent,
@@ -36,7 +37,7 @@ const SECTIONS: { id: SectionId; label: string; phase: number }[] = [
   { id: 'chronicles', label: 'Chroniques', phase: 7 },
   { id: 'divinity', label: 'Divinité', phase: 6 },
 ];
-const CURRENT_PHASE = 4;
+const CURRENT_PHASE = 6;
 
 const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
   hut: ['Hutte', 'Abri rudimentaire pour une petite famille.'],
@@ -64,6 +65,7 @@ const el = <T extends HTMLElement>(html: string): T => {
   t.innerHTML = html.trim();
   return t.content.firstElementChild as T;
 };
+const MARK_LABELS: Record<string, string> = { drought: 'sécheresse', storm: 'tempête', blessed: 'bénie', protected: 'protégée', game: 'gibier abondant' };
 const faithCss = (id: number) => `#${FAITH_COLORS_HEX[(id - 1) % FAITH_COLORS_HEX.length].toString(16).padStart(6, '0')}`;
 const SEED_WORDS = ['Aurore', 'Cendre', 'Borée', 'Ys', 'Thulé', 'Ambre', 'Oriflamme', 'Solstice', 'Ether', 'Lumen', 'Mnémosyne', 'Avalon', 'Hespérie', 'Ogygie'];
 
@@ -89,6 +91,8 @@ export class App {
   private lastPopulationUpdate = 0;
   private econSite = 0;
   private civShown = 0;
+  private armed: DivinePower | null = null;
+  private armedBar: HTMLElement;
   private historyFilter = 'all';
   private labels: HTMLElement;
   private labelNodes = new Map<number, HTMLButtonElement>();
@@ -130,7 +134,9 @@ export class App {
     </div></div>`);
     this.toastEl = el(`<div id="toast" class="glass closed"></div>`);
     this.labels = el(`<div id="labels" class="fade out"></div>`);
-    this.root.append(this.labels);
+    this.armedBar = el(`<div id="armed" class="glass hidden"><div><b></b><br><span></span></div><button class="btn" data-a="disarm">Annuler</button></div>`);
+    this.armedBar.querySelector('button')!.addEventListener('click', () => this.arm(null));
+    this.root.append(this.labels, this.armedBar);
     this.root.append(this.topbar, this.nav, this.panel, this.inspector, this.viewbar, this.perf, this.tutorial, this.toastEl, this.intro, rotate);
 
     this.buildTopbar();
@@ -155,6 +161,7 @@ export class App {
       if (this.section === 'civilizations') this.renderCivPanel();
       if (this.section === 'politics') this.renderPoliticsPanel();
       if (this.section === 'history' && document.activeElement?.tagName !== 'INPUT') this.renderHistoryPanel();
+      if (this.section === 'divinity') this.updateDivinity();
     };
     game.onBuildings = () => {
       const b = game.buildings.find((x) => x.id === this.shownBuilding);
@@ -176,7 +183,7 @@ export class App {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       if (e.code === 'F3') { e.preventDefault(); this.perf.classList.toggle('hidden'); }
       if (e.code === 'Space' && game.running) { e.preventDefault(); game.setSpeed(game.clock.speedIndex === 0 ? 1 : 0); }
-      if (e.code === 'Escape') { this.openSection(null); this.closeInspector(); }
+      if (e.code === 'Escape') { this.openSection(null); this.closeInspector(); this.arm(null); }
       const n = Number(e.key);
       if (game.running && n >= 1 && n <= SPEEDS.length - 1) game.setSpeed(n);
     });
@@ -314,6 +321,7 @@ export class App {
     if (id === 'civilizations') this.renderCivPanel();
     if (id === 'politics') this.renderPoliticsPanel();
     if (id === 'history') this.renderHistoryPanel();
+    if (id === 'divinity') this.renderDivinityPanel();
     if (id === 'atlas') {
       this.tutorialState.atlas = true;
       this.renderAtlasPanel();
@@ -448,6 +456,7 @@ export class App {
   private onWorldClick(ev: PointerEvent): void {
     const g = this.game;
     if (!g.world || !g.running) return;
+    if (this.armed) { void this.castPower(ev); return; }
     const hit = g.engine.pick(ev.clientX, ev.clientY, ev.pointerType !== 'mouse');
     if (!hit) { this.closeInspector(); return; }
     this.tutorialState.inspect = true;
@@ -662,7 +671,7 @@ export class App {
       const n = esc(name);
       if (text.includes(n)) text = text.replace(n, `<button data-person="${id}">${n}</button>`);
     };
-    const collective = e.type === 'war' || e.type === 'peace' || e.type === 'alliance' || e.type === 'battle' || e.type === 'siege' || e.type === 'conquest' || e.type === 'secession';
+    const collective = e.type === 'omen' || e.type === 'war' || e.type === 'peace' || e.type === 'alliance' || e.type === 'battle' || e.type === 'siege' || e.type === 'conquest' || e.type === 'secession';
     if (!collective) link(e.a, e.names?.[0]);
     if (e.type !== 'war' && e.type !== 'peace' && e.type !== 'alliance' && e.type !== 'battle' && e.type !== 'siege' && e.type !== 'conquest' && e.type !== 'secession') {
       link(e.b, e.type === 'birth' || e.type === 'marriage' || e.type === 'ruler' || e.type === 'coup' ? e.names?.[1] : undefined);
@@ -762,7 +771,7 @@ export class App {
     const w = g.sim.world;
     if (!w) { body.innerHTML = '<p class="note">La simulation démarre…</p>'; return; }
     const groups: Record<string, string[]> = {
-      all: [], power: ['civ', 'ruler', 'coup', 'government', 'colony', 'secession', 'alliance'], war: ['war', 'peace', 'battle', 'siege', 'conquest'], mind: ['tech', 'religion', 'schism', 'faithEnd', 'festival'],
+      all: [], power: ['civ', 'ruler', 'coup', 'government', 'colony', 'secession', 'alliance'], war: ['war', 'peace', 'battle', 'siege', 'conquest'], mind: ['tech', 'religion', 'schism', 'faithEnd', 'festival', 'divine', 'omen'],
       life: ['birth', 'death', 'marriage'], works: ['built', 'famine', 'harvest', 'trade', 'shortage', 'founded'],
     };
     const labels: Record<string, string> = { all: 'Grands faits', power: 'Pouvoir', war: 'Guerres', mind: 'Esprit', life: 'Vies', works: 'Travaux' };
@@ -872,6 +881,82 @@ export class App {
     for (const [id, node] of this.labelNodes) if (!seen.has(id)) node.style.display = 'none';
   }
 
+  // ------------------------------------------------------------- divinity
+  /** Chooses a power: the next touch on the world casts it there. */
+  private arm(power: DivinePower | null): void {
+    this.armed = power;
+    this.armedBar.classList.toggle('hidden', !power);
+    if (!power) return;
+    const def = POWERS[power];
+    this.armedBar.querySelector('b')!.textContent = def.name;
+    this.armedBar.querySelector('span')!.textContent = def.target === 'people' ? 'Touchez un lieu habité' : 'Touchez la terre où agir';
+    this.openSection(null);
+    this.closeInspector();
+  }
+
+  private async castPower(ev: PointerEvent): Promise<void> {
+    const g = this.game;
+    const power = this.armed!;
+    const hit = g.engine.pick(ev.clientX, ev.clientY, ev.pointerType !== 'mouse');
+    let point: THREE.Vector3 | null = null;
+    if (hit?.type === 'terrain') point = hit.point;
+    else if (hit?.type === 'building') point = new THREE.Vector3(hit.building.dir.x, hit.building.dir.y, hit.building.dir.z).multiplyScalar(g.world!.R);
+    else if (hit?.type === 'person') {
+      const r = g.sim.rosterById.get(hit.id);
+      const st = g.settlements.find((x) => x.id === r?.settlement);
+      if (st) point = new THREE.Vector3(st.dir.x, st.dir.y, st.dir.z).multiplyScalar(g.world!.R);
+    }
+    if (!point) return;
+    this.arm(null);
+    const res = await g.divine(power, point);
+    if (!res.ok) { this.toast(res.reason ?? 'Rien ne se produit'); return; }
+    const parts: string[] = [POWERS[power].name];
+    if (res.deaths) parts.push(`${res.deaths} mort${res.deaths > 1 ? 's' : ''}`);
+    if (res.destroyed) parts.push(`${res.destroyed} bâtiment${res.destroyed > 1 ? 's' : ''} touché${res.destroyed > 1 ? 's' : ''}`);
+    this.toast(parts.join(' — '));
+    if (res.person) this.selectPerson(res.person, true);
+  }
+
+  /** Live refresh of the Divinity panel without rebuilding its buttons (so a tap is never lost). */
+  private updateDivinity(): void {
+    const w = this.game.sim.world;
+    const meter = this.panel.querySelector('#div-meter'), list = this.panel.querySelector<HTMLElement>('#div-journal');
+    if (!w || !meter || !list) return;
+    const energy = w.divine.energy;
+    meter.innerHTML = this.meter('Puissance', energy / 100);
+    this.panel.querySelectorAll<HTMLElement>('[data-power]').forEach((b) => b.classList.toggle('off', energy < POWERS[b.dataset.power as DivinePower].cost));
+    const journal = w.events.filter((e) => e.type === 'divine' || e.type === 'omen').slice(-14).reverse();
+    const html = journal.map((e) => this.eventLine(e)).join('') || '<li>Vous n’êtes pas encore intervenu.</li>';
+    if (list.dataset.html !== html) {
+      list.innerHTML = html;
+      list.dataset.html = html;
+      this.bindPanelLinks(list);
+    }
+  }
+
+  private renderDivinityPanel(): void {
+    const g = this.game;
+    this.panel.querySelector('h2')!.textContent = 'Divinité';
+    const body = this.panel.querySelector<HTMLElement>('.body')!;
+    const w = g.sim.world;
+    const energy = w?.divine.energy ?? 0;
+    const journal = (w?.events ?? []).filter((e) => e.type === 'divine' || e.type === 'omen').slice(-14).reverse();
+    const top = body.scrollTop;
+    body.innerHTML = `<h3>Ferveur du monde</h3><div id="div-meter">${this.meter('Puissance', energy / 100)}</div>
+      <p class="note">Chaque intervention puise dans cette réserve. Elle se reforme avec le temps, et plus vite quand les peuples croient avec ferveur.</p>
+      <h3>Pouvoirs</h3>
+      ${POWER_ORDER.map((id) => { const d = POWERS[id]; return `<button class="power ${d.benevolent ? '' : 'harm'} ${energy < d.cost ? 'off' : ''}" data-power="${id}"><span class="name">${d.name}<i>${d.cost}</i></span><small>${d.effect}</small></button>`; }).join('')}
+      <p class="note">Choisissez un pouvoir, puis touchez le monde. Chaque acte modifie réellement la planète ou la vie des habitants, et les peuples l’interprètent selon ce qu’ils croient.</p>
+      <h3>Vos actes et ce qu’on en dit</h3><ul class="timeline" id="div-journal">${journal.map((e) => this.eventLine(e)).join('') || '<li>Vous n’êtes pas encore intervenu.</li>'}</ul>`;
+    body.scrollTop = top;
+    body.querySelectorAll<HTMLElement>('[data-power]').forEach((b) => b.addEventListener('click', () => {
+      const id = b.dataset.power as DivinePower;
+      if ((g.sim.world?.divine.energy ?? 0) < POWERS[id].cost) { this.toast('Ferveur insuffisante pour ce pouvoir'); return; }
+      this.arm(id);
+    }));
+    this.bindPanelLinks(body);
+  }
+
   // -------------------------------------------------------------- economy
   /** Stocks, prices, trades, building sites and journal of one settlement — live simulation data. */
   private renderEconomyPanel(): void {
@@ -901,6 +986,7 @@ export class App {
       <h3>${this.tier(st.population)} de ${esc(nameOf(st.id))}</h3>
       <div class="kv"><span>Habitants</span><b>${st.population} (${st.adults} actifs)</b><span>Logements</span><b>${st.housing} places</b>
         <span>Bâtiments</span><b>${st.buildings}</b><span>Caisse commune</span><b>${fmt(st.treasury)} pièces</b>
+        ${st.marks.length ? `<span>Marques divines</span><b>${st.marks.map((m) => MARK_LABELS[m] ?? m).join(', ')}</b>` : ''}
         <span>Gibier et cueillette</span><b>${fmt(Math.min(1, st.forage) * 100)} %</b><span>Récolte de l’année</span><b>${fmt(st.harvest * 100)} %</b></div>
       <h3>Greniers et prix</h3>${rows}
       <p class="note">Barre : stock par rapport au niveau visé (${units[0]}, ${units[1]}, ${units[2]}…). Un prix élevé signale un manque et attire les bras.</p>
@@ -924,6 +1010,7 @@ export class App {
     if (!show) {
       this.openSection(null);
       this.closeInspector();
+      this.arm(null);
       this.tutorial.classList.add('hidden');
       for (const n of this.labelNodes.values()) n.remove();
       this.labelNodes.clear();

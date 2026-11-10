@@ -1,5 +1,6 @@
 import type { CameraState } from '../render/cameraController';
 import type { SimState } from '../sim/types';
+import type { WorldEdit } from '../world/edits';
 import { mirrorDelete, mirrorReadAll, mirrorWrite } from '../platform/platform';
 
 /**
@@ -23,6 +24,8 @@ export interface SaveData {
   camera: CameraState;
   /** The whole society: individuals, families, households, the dead (null in saves older than phase 2). */
   sim: SimState | null;
+  /** Divine changes made to the planet, replayed in order after regeneration. */
+  worldEdits: WorldEdit[];
 }
 
 export const SAVE_SLOTS = ['auto', 'slot1', 'slot2', 'slot3'] as const;
@@ -75,6 +78,7 @@ export function validateSave(data: unknown): SaveData {
     speedIndex: typeof s.speedIndex === 'number' ? s.speedIndex : 1,
     camera: s.camera,
     sim,
+    worldEdits: Array.isArray(s.worldEdits) ? s.worldEdits.filter((e) => e && typeof e.kind === 'string' && Number.isFinite(e.x) && Number.isFinite(e.y)) : [],
   };
 }
 
