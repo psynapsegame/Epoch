@@ -16,11 +16,13 @@ export class BuildingsLayer {
   constructor() {
     this.models = buildBuildingModels();
     this.material = patchMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0 }), {
-      vertexPars: `attribute float emissive; varying float vGlow;`,
-      vertexTransform: `vGlow = emissive;`,
-      fragPars: `varying float vGlow;`,
+      vertexPars: `attribute float emissive; attribute vec2 aBuild; varying float vGlow; varying float vCut;`,
+      // aBuild = (progress 0..1, model height): the building rises from its foundations as work advances
+      vertexTransform: `vGlow = emissive; vCut = (-1.5 + (aBuild.y + 1.5) * aBuild.x) - position.y + step(0.999, aBuild.x) * 1000.0;`,
+      fragPars: `varying float vGlow; varying float vCut;`,
+      fragColor: `if (vCut < 0.0) discard; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.5, 0.36), 0.35 * (1.0 - smoothstep(0.0, 0.35, vCut)) * step(vCut, 500.0));`,
       fragEmissive: /* glsl */ `
-        {
+        if (vCut > 500.0) {
           float night = 1.0 - smoothstep(-0.08, 0.16, epochSunUp);
           float flicker = 0.85 + 0.15 * sin(uTime * 7.0 + vWPos.x * 3.0 + vWPos.z * 5.0);
           totalEmissiveRadiance += vec3(2.6, 1.35, 0.42) * vGlow * (0.06 + 0.94 * night) * flicker;
@@ -28,10 +30,33 @@ export class BuildingsLayer {
     });
   }
 
-  /** Rebuilds instances from the list of buildings in the simulation state. */
-  sync(world: World, buildings: Building[]): void {
+  private signature = '';
+
+  /**
+   * Mirrors the simulation's buildings. Returns true when the set of buildings
+   * changed (not just their construction progress).
+   */
+  sync(world: World, buildings: Building[]): boolean {
+    const signature = buildings.map((b) => b.id).join(',');
+    if (signature === this.signature && buildings.length) {
+      // same buildings: only construction progress moved
+      for (const [kind, mesh] of this.meshes) {
+        const list = this.lookup.get(kind)!;
+        const attr = mesh.geometry.getAttribute('aBuild') as THREE.InstancedBufferAttribute;
+        const byId = new Map(buildings.map((b) => [b.id, b]));
+        list.forEach((old, i) => {
+          const b = byId.get(old.id) ?? old;
+          list[i] = b;
+          attr.setX(i, b.progress ?? 1);
+        });
+        attr.needsUpdate = true;
+      }
+      return false;
+    }
+    this.signature = signature;
     for (const m of this.meshes.values()) {
       this.group.remove(m);
+      m.geometry.dispose();
       m.dispose();
     }
     this.meshes.clear();
@@ -45,7 +70,13 @@ export class BuildingsLayer {
     for (const kind of BUILDING_KINDS) {
       const list = byKind.get(kind);
       if (!list?.length) continue;
-      const inst = new THREE.InstancedMesh(this.models[kind].geometry, this.material, list.length);
+      const model = this.models[kind] ?? this.models.house;
+      // each kind owns a copy of the geometry so it can carry per-instance construction data
+      const geo = model.geometry.clone();
+      const build = new THREE.InstancedBufferAttribute(new Float32Array(list.length * 2), 2);
+      list.forEach((b, i) => build.setXY(i, b.progress ?? 1, model.height));
+      geo.setAttribute('aBuild', build);
+      const inst = new THREE.InstancedMesh(geo, this.material, list.length);
       list.forEach((b, i) => {
         y.set(b.dir.x, b.dir.y, b.dir.z);
         z.set(b.facing.x, b.facing.y, b.facing.z);
@@ -64,6 +95,7 @@ export class BuildingsLayer {
       this.meshes.set(kind, inst);
       this.lookup.set(kind, list);
     }
+    return true;
   }
 
   /** Returns the building hit by a ray, if any. */

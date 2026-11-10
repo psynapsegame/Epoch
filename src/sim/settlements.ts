@@ -15,6 +15,8 @@ export interface Building {
   facing: Vec3;
   /** Footprint radius (m) used for spacing. */
   radius: number;
+  /** Construction progress 0..1 (absent = complete). */
+  progress?: number;
 }
 
 export interface Settlement {
@@ -29,7 +31,7 @@ export interface Settlement {
 
 const FOOTPRINT: Record<BuildingKind, number> = {
   hut: 4.5, house: 6.5, longhouse: 10, farm: 10, barn: 9.5, market: 8.5, workshop: 8.5,
-  storehouse: 7, temple: 10, well: 3, windmill: 6.5, watchtower: 5, dock: 8,
+  storehouse: 7, temple: 10, well: 3, windmill: 6.5, watchtower: 5, dock: 8, mine: 8,
 };
 
 const cross = (a: Vec3, b: Vec3): Vec3 => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });

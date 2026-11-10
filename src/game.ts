@@ -1,10 +1,9 @@
-import * as THREE from 'three';
 import { Engine } from './render/engine';
 import { SimClock, SECONDS_PER_DAY, SPEEDS, dateOf, seasonPhase } from './sim/clock';
 import { layoutHamlet, type Building, type Settlement } from './sim/settlements';
 import { SimClient } from './sim/simClient';
-import { buildSimSite } from './sim/sites';
-import type { SimState } from './sim/types';
+import { buildSimSite, foundingBuildings, siteFrame } from './sim/sites';
+import { SIM_STATE_VERSION, type SimState } from './sim/types';
 import { Rng, hashString } from './core/rng';
 import { placeName } from './world/names';
 import { generateWorldAsync } from './world/generateAsync';
@@ -53,7 +52,11 @@ export class Game {
   /** Selected inhabitant (0 = none) and whether the camera follows them. */
   selected = 0;
   following = false;
+  /** True when the last loaded save predates the current society rules and was re-founded. */
+  refounded = false;
   onTick: (() => void) | null = null;
+  /** Fired when buildings were added or progressed. */
+  onBuildings: (() => void) | null = null;
   /** Fired when the governor lowers the quality tier on its own. */
   onQualityChange: ((tier: QualityTier, automatic: boolean) => void) | null = null;
   readonly device = deviceInfo();
@@ -67,6 +70,7 @@ export class Game {
     this.engine = new Engine(canvas);
     this.tier = this.settings.quality === 'auto' ? defaultTier(this.device) : this.settings.quality;
     this.engine.applyQuality(PROFILES[this.tier]);
+    this.sim.onBuildings = () => this.onSimBuildings();
 
     let lastRender = performance.now();
     const loop = (now: number) => {
@@ -167,7 +171,8 @@ export class Game {
     this.foundHamlets();
     this.select(0);
 
-    const sites = this.settlements.map((s) => buildSimSite(this.world!, s, this.buildings));
+    const sites = this.settlements.map((s) => buildSimSite(this.world!, s, this.settlements));
+    const founding = foundingBuildings(this.world, this.settlements, this.buildings);
     // Dawn of year 1: early morning over the first hamlet.
     const first = this.settlements[0]?.dir ?? { x: 1, y: 0.3, z: 0.2 };
     const lon = Math.atan2(first.z, first.x);
@@ -175,7 +180,7 @@ export class Game {
     this.clock.time = start;
     this.visualDay = start / SECONDS_PER_DAY;
     this.engine.people.setSettlements(this.settlements);
-    this.sim.init(seed, sites, FOUNDING_POPULATION, start, saved);
+    this.sim.init(seed, sites, founding, FOUNDING_POPULATION, start, saved);
     this.engine.controls.setState({ dir: [first.x, first.y, first.z], distance: 9800, heading: 0, tilt: 0 });
   }
 
@@ -191,10 +196,31 @@ export class Game {
       this.settlements.push(settlement);
       this.buildings.push(...buildings);
     }
-    this.engine.syncBuildings(
-      this.buildings,
-      this.settlements.map((s) => ({ dir: new THREE.Vector3(s.dir.x, s.dir.y, s.dir.z), radius: s.radius + 6 })),
-    );
+    this.engine.syncBuildings(this.buildings);
+  }
+
+  /** The simulation raised, advanced or finished buildings: mirror them into the scene. */
+  private onSimBuildings(): void {
+    if (!this.world || !this.sim.buildings.length) return;
+    const frames = new Map(this.settlements.map((s) => [s.id, siteFrame(s)]));
+    const R = this.world.R;
+    const list: Building[] = [];
+    const a = { x: 0, y: 0, z: 0 }, b = { x: 0, y: 0, z: 0 };
+    for (const sb of this.sim.buildings) {
+      const f = frames.get(sb.settlement);
+      if (!f) continue;
+      f.toDir(sb.e, sb.n, R, a);
+      f.toDir(sb.e + sb.fe * 3, sb.n + sb.fn * 3, R, b);
+      const fx = b.x - a.x, fy = b.y - a.y, fz = b.z - a.z;
+      const l = Math.hypot(fx, fy, fz) || 1;
+      list.push({
+        id: sb.id, kind: sb.kind as Building['kind'], settlement: sb.settlement, dir: { ...a }, facing: { x: fx / l, y: fy / l, z: fz / l },
+        radius: sb.radius, progress: sb.progress,
+      });
+    }
+    this.buildings = list;
+    this.engine.syncBuildings(list);
+    this.onBuildings?.();
   }
 
   /** Starts or stops the flow of time (the title screen and cinematics keep the world frozen). */
@@ -272,8 +298,10 @@ export class Game {
 
   /** Restores a save: regenerates the world from its seed, then reapplies the evolved state. */
   async load(save: SaveData, onProgress: (stage: string, stageIndex: number, p: number) => void): Promise<{ checksumOk: boolean }> {
-    // a save from before the inhabitants existed keeps its date; its population is founded now
-    await this.createWorld(save.seed, onProgress, save.sim ?? undefined, save.sim ? undefined : save.simTime);
+    // A save from an earlier phase keeps its world and date; its society is founded anew with the current rules.
+    const sim = save.sim && save.sim.version === SIM_STATE_VERSION ? save.sim : undefined;
+    await this.createWorld(save.seed, onProgress, sim, sim ? undefined : save.simTime);
+    this.refounded = !!save.sim && !sim;
     this.clock.speedIndex = Math.max(0, Math.min(SPEEDS.length - 1, save.speedIndex));
     this.engine.controls.setState(save.camera);
     return { checksumOk: !save.worldChecksum || save.worldChecksum === this.worldSum };

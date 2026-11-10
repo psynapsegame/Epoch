@@ -230,10 +230,11 @@ export class Engine {
   }
 
   /** Mirrors the simulation's buildings into the scene. */
-  syncBuildings(buildings: Building[], clearings: { dir: THREE.Vector3; radius: number }[]): void {
+  syncBuildings(buildings: Building[]): void {
     if (!this.world || !this.terrain) return;
-    this.buildings.sync(this.world, buildings);
-    this.terrain.setClearings(clearings);
+    if (!this.buildings.sync(this.world, buildings)) return;
+    // new plots are cleared of trees
+    this.terrain.setClearings(buildings.map((b) => ({ dir: new THREE.Vector3(b.dir.x, b.dir.y, b.dir.z), radius: b.radius + 5 })));
     this.terrain.refreshTrees();
   }
 

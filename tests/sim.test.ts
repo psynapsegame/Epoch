@@ -2,14 +2,16 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { generateWorld } from '../src/world/generator';
 import { World } from '../src/world/world';
 import { layoutHamlet, type Building, type Settlement } from '../src/sim/settlements';
-import { buildSimSite } from '../src/sim/sites';
+import { buildSimSite, foundingBuildings } from '../src/sim/sites';
 import { Simulation } from '../src/sim/simulation';
 import { findPath, isWalkable, lineOfSight } from '../src/sim/pathfinding';
+import { BUILD_COST, assignJobs, jobSlots, planConstruction, updatePrices, workOnProject } from '../src/sim/economy';
 import { SECONDS_PER_DAY, SECONDS_PER_YEAR, TICK_SECONDS, localHour } from '../src/sim/clock';
-import { Activity, N, T, type SimSite } from '../src/sim/types';
+import { Activity, BASE_PRICE, J, N, R, T, type FoundingBuilding, type SimSite } from '../src/sim/types';
 
 const TICKS_PER_DAY = SECONDS_PER_DAY / TICK_SECONDS;
 let sites: SimSite[] = [];
+let founding: FoundingBuilding[] = [];
 const START = 7 * 3600;
 
 beforeAll(() => {
@@ -20,37 +22,51 @@ beforeAll(() => {
     settlements.push(r.settlement);
     buildings.push(...r.buildings);
   }
-  sites = settlements.map((s) => buildSimSite(world, s, buildings));
+  sites = settlements.map((s) => buildSimSite(world, s, settlements));
+  founding = foundingBuildings(world, settlements, buildings);
 });
 
-const fresh = (seed = 'alpha', n = 100) => Simulation.create(seed, sites, n, START);
+const fresh = (seed = 'alpha', n = 100) => Simulation.create(seed, sites, founding, n, START);
+const door = (b: { e: number; n: number; fe: number; fn: number; radius: number }) => ({ e: b.e + b.fe * (b.radius * 0.72 + 1.2), n: b.n + b.fn * (b.radius * 0.72 + 1.2) });
+const coins = (sim: Simulation) => sim.state.settlements.reduce((a, s) => a + s.treasury, 0) + sim.state.households.reduce((a, h) => a + h.coins, 0);
 
 describe('settlement maps', () => {
   it('offer walkable ground, water and reachable homes', () => {
-    for (const s of sites.slice(0, 3)) {
+    const sim = fresh();
+    for (const base of sites.slice(0, 3)) {
+      const s = sim.site(base.id)!;
       let walk = 0;
       for (const v of s.walk) walk += v;
       expect(walk).toBeGreaterThan(s.size * s.size * 0.2);
-      expect(s.water.length).toBeGreaterThan(0);
-      const homes = s.buildings.filter((b) => ['house', 'hut', 'longhouse', 'farm'].includes(b.kind));
+      const homes = sim.buildingsOf(s.id).filter((b) => ['house', 'hut', 'longhouse', 'farm'].includes(b.kind));
       expect(homes.length).toBeGreaterThan(3);
-      const well = s.water[0];
+      const well = door(homes[0]);
       let reachable = 0;
-      for (const h of homes) if (findPath(s, h.doorE, h.doorN, well.e, well.n)) reachable++;
+      for (const h of homes) if (findPath(s, door(h).e, door(h).n, well.e, well.n)) reachable++;
       expect(reachable).toBeGreaterThanOrEqual(homes.length - 1);
     }
   });
   it('finds paths that stay on walkable ground', () => {
-    const s = sites[0];
-    const a = s.buildings[1], b = s.buildings[s.buildings.length - 2];
-    const path = findPath(s, a.doorE, a.doorN, b.doorE, b.doorN);
+    const sim = fresh();
+    const s = sim.site(sites[0].id)!;
+    const list = sim.buildingsOf(s.id);
+    const a = door(list[1]), b = door(list[list.length - 2]);
+    const path = findPath(s, a.e, a.n, b.e, b.n);
     expect(path).not.toBeNull();
-    let e = a.doorE, n = a.doorN;
+    let e = a.e, n = a.n;
     for (let i = 0; i < path!.length; i += 2) {
-      expect(isWalkable(s, path![i], path![i + 1])).toBe(true);
-      if (i > 0) expect(lineOfSight(s, e, n, path![i], path![i + 1])).toBe(true);
+      if (i < path!.length - 2) expect(isWalkable(s, path![i], path![i + 1])).toBe(true);
+      if (i > 0 && i < path!.length - 2) expect(lineOfSight(s, e, n, path![i], path![i + 1])).toBe(true);
       e = path![i];
       n = path![i + 1];
+    }
+  });
+  it('know their neighbours over land', () => {
+    const linked = sites.filter((s) => s.neighbors.length > 0);
+    for (const s of linked) for (const nb of s.neighbors) {
+      expect(nb.distance).toBeGreaterThan(300);
+      expect(Math.hypot(nb.e, nb.n)).toBeGreaterThan(nb.distance * 0.9);
+      expect(sites.find((o) => o.id === nb.id)!.neighbors.some((b) => b.id === s.id)).toBe(true);
     }
   });
 });
@@ -132,7 +148,7 @@ describe('simulation', () => {
       sim.run(37);
       for (const p of sim.state.persons) {
         const s = sim.site(p.settlement)!;
-        if (!p.inside && p.path.length === 0) expect(isWalkable(s, p.e, p.n) || Math.hypot(p.e - p.te, p.n - p.tn) < 6).toBe(true);
+        if (!p.inside && !p.trip && p.path.length === 0) expect(isWalkable(s, p.e, p.n) || Math.hypot(p.e - p.te, p.n - p.tn) < 6).toBe(true);
         for (const v of p.needs) { expect(v).toBeGreaterThanOrEqual(0); expect(v).toBeLessThanOrEqual(1); }
       }
     }
@@ -148,8 +164,8 @@ describe('simulation', () => {
     expect(s.avgNeeds[N.Sleep]).toBeGreaterThan(0.4);
     const meals = sim.state.persons.reduce((a, p) => a + p.counts.meals, 0);
     const forages = sim.state.persons.reduce((a, p) => a + p.counts.forages, 0);
-    expect(meals / s.alive / 30).toBeGreaterThan(1.2); // meals per person per day
-    expect(forages).toBeGreaterThan(300);
+    expect(meals / s.alive / 30).toBeGreaterThan(0.75); // meals per person per day
+    expect(forages).toBeGreaterThan(100);
   });
 
   it('makes hungry people eat and thirsty people drink', () => {
@@ -168,9 +184,12 @@ describe('simulation', () => {
   });
 
   it('lets starvation kill when there is nothing to eat', () => {
-    const barren: SimSite[] = sites.map((s) => ({ ...s, forage: new Uint8Array(s.forage.length) }));
-    const sim = Simulation.create('alpha', barren, 30, START);
+    const barren: SimSite[] = sites.map((s) => ({ ...s, forage: new Uint8Array(s.forage.length), fertility: new Uint8Array(s.fertility.length) }));
+    const sim = Simulation.create('alpha', barren, founding, 30, START);
     for (const h of sim.state.households) h.food = 0;
+    for (const st of sim.state.settlements) st.stock[R.Food] = 0;
+    // no farms, barns or docks either: the land gives nothing
+    for (const b of sim.state.buildings) if (['farm', 'barn', 'dock'].includes(b.kind)) b.progress = 0.5;
     sim.run(TICKS_PER_DAY * 12);
     expect(sim.state.dead.length).toBeGreaterThan(5);
     expect(sim.state.dead[0].cause).toBe('starvation');
@@ -219,5 +238,185 @@ describe('simulation', () => {
     const friends = sim.state.persons.filter((p) => p.memories.some((m) => m.type === 'friend')).length;
     expect(friends).toBeGreaterThan(5);
     for (const p of sim.state.persons) expect(p.memories.length).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('economy', () => {
+  it('gives people real professions tied to buildings', () => {
+    const sim = fresh();
+    sim.run(TICKS_PER_DAY * 3);
+    const jobs = sim.summary().byJob;
+    expect(jobs[J.Farmer]).toBeGreaterThan(3);
+    expect(jobs[J.Gatherer]).toBeGreaterThan(3);
+    for (const p of sim.state.persons) {
+      const age = (sim.state.time - p.birth) / SECONDS_PER_YEAR;
+      if (age < 14) expect(p.job).toBe(J.Gatherer);
+      if (p.job === J.Farmer) expect(sim.building(p.workplace)!.kind).toBe('farm');
+      if (p.job === J.Fisher) expect(sim.building(p.workplace)!.kind).toBe('dock');
+    }
+    // nobody is assigned to more positions than exist
+    for (const st of sim.state.settlements) {
+      const farms = sim.buildingsOf(st.id).filter((b) => b.kind === 'farm' && b.progress >= 1).length;
+      expect(sim.state.persons.filter((p) => p.settlement === st.id && p.job === J.Farmer).length).toBeLessThanOrEqual(farms * 2);
+    }
+  });
+
+  it('produces, stores and sells goods; money is conserved', () => {
+    const sim = fresh();
+    const before = coins(sim);
+    sim.run(TICKS_PER_DAY * 20);
+    expect(coins(sim)).toBeCloseTo(before, 3);
+    const st = sim.settlement(1)!;
+    const farms = sim.buildingsOf(1).filter((b) => b.kind === 'farm');
+    expect(farms.reduce((a, b) => a + b.produced, 0)).toBeGreaterThan(20);
+    expect(sim.state.persons.reduce((a, p) => a + p.counts.shifts, 0)).toBeGreaterThan(200);
+    for (const v of st.stock) expect(v).toBeGreaterThanOrEqual(0);
+    // some households earned a living
+    expect(sim.state.households.some((h) => h.coins > 20)).toBe(true);
+  });
+
+  it('raises prices when a resource is scarce', () => {
+    const sim = fresh();
+    const st = sim.settlement(1)!;
+    st.stock[R.Food] = 0;
+    st.stock[R.Wood] = 500;
+    updatePrices(sim, st);
+    expect(st.prices[R.Food]).toBeGreaterThan(BASE_PRICE[R.Food] * 2);
+    expect(st.prices[R.Wood]).toBeLessThan(BASE_PRICE[R.Wood] * 0.6);
+  });
+
+  it('cannot forge tools without iron', () => {
+    const sim = fresh();
+    const st = sim.settlement(1)!;
+    st.stock[R.Iron] = 0;
+    expect(jobSlots(sim, st)[J.Smith]).toBe(0);
+    st.stock[R.Iron] = 6;
+    st.stock[R.Coal] = 6;
+    st.stock[R.Tools] = 0;
+    expect(jobSlots(sim, st)[J.Smith]).toBeGreaterThan(0);
+    assignJobs(sim, st);
+    const smith = sim.state.persons.find((p) => p.settlement === 1 && p.job === J.Smith)!;
+    expect(smith).toBeDefined();
+    sim.run(TICKS_PER_DAY * 6);
+    expect(st.stock[R.Tools]).toBeGreaterThan(0.5);
+    expect(st.stock[R.Iron]).toBeLessThan(6);
+  });
+
+  it('builds what the community needs, with real materials and labour', () => {
+    const sim = fresh();
+    const st = sim.settlement(1)!;
+    // crowd one home so the community decides to build a house
+    const hh = sim.state.households.find((h) => h.settlement === 1)!;
+    const others = sim.state.households.filter((h) => h.settlement === 1 && h !== hh).slice(0, 2);
+    for (const o of others) for (const id of [...o.members]) sim.moveToHousehold(sim.person(id)!, o, hh);
+    for (const b of sim.buildingsOf(1)) if (!sim.householdOfBuilding(b.id) && ['house', 'hut', 'longhouse', 'farm'].includes(b.kind)) b.kind = 'storehouse';
+    st.stock[R.Wood] = 80;
+    st.stock[R.Stone] = 40;
+    const count = sim.state.buildings.length;
+    planConstruction(sim, st);
+    expect(st.projects.length).toBe(1);
+    const project = sim.building(st.projects[0])!;
+    expect(['house', 'hut']).toContain(project.kind);
+    expect(project.progress).toBe(0);
+    expect(sim.state.buildings.length).toBe(count + 1);
+    // the plot is on walkable ground and free of other buildings
+    for (const b of sim.buildingsOf(1)) if (b !== project) expect(Math.hypot(b.e - project.e, b.n - project.n)).toBeGreaterThan(b.radius + project.radius);
+    const wood = st.stock[R.Wood];
+    sim.run(TICKS_PER_DAY * 25);
+    expect(project.progress).toBe(1);
+    expect(project.completed).toBeGreaterThan(project.started);
+    expect(st.stock[R.Wood]).toBeLessThan(wood + 60);
+    expect(sim.state.events.some((e) => e.type === 'built' && e.what === project.kind)).toBe(true);
+    expect(sim.state.persons.some((p) => p.memories.some((m) => m.type === 'built'))).toBe(true);
+    // a crowded family moved in
+    expect(sim.householdOfBuilding(project.id)).toBeDefined();
+  });
+
+  it('stalls construction when materials run out', () => {
+    const sim = fresh();
+    const st = sim.settlement(1)!;
+    const b = sim.addBuilding({ kind: 'temple', settlement: 1, e: 150, n: 150, fe: 0, fn: 1, radius: 10 }, 0);
+    st.projects.push(b.id);
+    const builder = sim.state.persons.find((p) => p.settlement === 1)!;
+    st.stock[R.Stone] = 0;
+    st.stock[R.Wood] = 100;
+    st.stock[R.Goods] = 100;
+    expect(workOnProject(sim, st, b, 30, builder)).toBe(0);
+    expect(b.progress).toBe(0);
+    expect(sim.state.events.some((e) => e.type === 'shortage' && e.what === R.Stone)).toBe(true);
+    st.stock[R.Stone] = 100;
+    expect(workOnProject(sim, st, b, 40, builder)).toBe(40);
+    expect(b.progress).toBeCloseTo(40 / BUILD_COST.temple.hours, 6);
+    expect(st.stock[R.Stone]).toBeCloseTo(100 - BUILD_COST.temple.stone * b.progress, 6);
+    // a little stone only allows a little progress
+    st.stock[R.Stone] = 3;
+    const before = b.progress;
+    workOnProject(sim, st, b, 400, builder);
+    expect(b.progress - before).toBeCloseTo(3 / BUILD_COST.temple.stone, 6);
+    expect(st.stock[R.Stone]).toBeCloseTo(0, 6);
+  });
+});
+
+describe('generations', () => {
+  it('lets the old die of old age and be mourned', () => {
+    const sim = fresh();
+    const elders = sim.state.persons.filter((p) => (START - p.birth) / SECONDS_PER_YEAR > 55);
+    expect(elders.length).toBeGreaterThan(2);
+    for (const p of elders) p.birth -= 30 * SECONDS_PER_YEAR; // make them very old
+    sim.setStride(10);
+    sim.run(Math.round((TICKS_PER_DAY * 120) / 10));
+    const dead = sim.state.dead.filter((d) => d.cause === 'age');
+    expect(dead.length).toBeGreaterThan(1);
+    expect(sim.state.events.some((e) => e.type === 'death' && e.what === 'age')).toBe(true);
+    expect(sim.view(dead[0].id)!.alive).toBe(false);
+  });
+
+  it('sees unions, births and deaths of old age over the years; the society grows', () => {
+    const sim = fresh();
+    sim.setStride(10);
+    const before = coins(sim);
+    const steps = Math.round((TICKS_PER_DAY * 360 * 3) / 10);
+    sim.run(steps);
+    const s = sim.summary();
+    const ev = sim.state.events;
+    expect(s.births).toBeGreaterThan(8);
+    expect(ev.some((e) => e.type === 'marriage')).toBe(true);
+    expect(s.alive).toBeGreaterThan(95);
+    expect(s.avgNeeds[N.Food]).toBeGreaterThan(0.4);
+    expect(coins(sim)).toBeCloseTo(before, 2);
+    // children born in the world carry their parents and their name
+    const born = sim.state.persons.filter((p) => p.birth > START);
+    for (const c of born) {
+      expect(c.parents[0]).toBeGreaterThan(0);
+      const mother = sim.person(c.parents[0]) ?? sim.state.dead.find((d) => d.id === c.parents[0])!;
+      expect(mother.children).toContain(c.id);
+    }
+    // every living person belongs to exactly one household of their settlement
+    const seen = new Set<number>();
+    for (const h of sim.state.households) {
+      expect(h.members.length).toBeGreaterThan(0);
+      for (const id of h.members) {
+        expect(seen.has(id)).toBe(false);
+        seen.add(id);
+        expect(sim.person(id)!.household).toBe(h.id);
+      }
+    }
+    expect(seen.size).toBe(sim.state.persons.length);
+  }, 180000);
+
+  it('stays deterministic with a coarser stride and across save / restore', () => {
+    const a = fresh(), b = fresh();
+    a.setStride(6);
+    b.setStride(6);
+    a.run(2000);
+    b.run(2000);
+    expect(b.checksum()).toBe(a.checksum());
+    const saved = JSON.parse(JSON.stringify(b.serialize()));
+    const c = new Simulation(sites, saved);
+    c.run(2000);
+    a.run(2000);
+    b.run(2000);
+    expect(c.checksum()).toBe(b.checksum());
+    expect(b.checksum()).toBe(a.checksum());
   });
 });

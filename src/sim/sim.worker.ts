@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { TICK_SECONDS } from './clock';
 import { Simulation } from './simulation';
-import type { SimSite, SimState } from './types';
+import type { FoundingBuilding, SimSite, SimState } from './types';
 
 /**
  * Simulation thread. The society lives here, independent of rendering: the
@@ -10,8 +10,8 @@ import type { SimSite, SimState } from './types';
  * compact snapshots for the renderer and the interface.
  */
 export type ToWorker =
-  | { type: 'init'; seed: string; sites: SimSite[]; population: number; time: number; state?: SimState }
-  | { type: 'rate'; rate: number }
+  | { type: 'init'; seed: string; sites: SimSite[]; founding: FoundingBuilding[]; population: number; time: number; state?: SimState }
+  | { type: 'rate'; rate: number; stride: number }
   | { type: 'watch'; id: number }
   | { type: 'state'; request: number }
   | { type: 'stop' };
@@ -22,8 +22,10 @@ let rate = 0;
 let budget = 0;
 let last = performance.now();
 let watch = 0;
-let lastSnapshot = 0, lastDetail = 0, lastState = 0;
+let lastSnapshot = 0, lastDetail = 0, lastState = 0, lastRoster = 0, lastBuildings = 0;
 let rosterVersion = -1;
+let buildingsVersion = -1;
+let lastEconomy = 0;
 
 function postSnapshot(lagging: boolean): void {
   if (!sim) return;
@@ -41,7 +43,8 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
   const m = ev.data;
   switch (m.type) {
     case 'init':
-      sim = m.state ? new Simulation(m.sites, m.state) : Simulation.create(m.seed, m.sites, m.population, m.time);
+      sim = m.state ? new Simulation(m.sites, m.state) : Simulation.create(m.seed, m.sites, m.founding, m.population, m.time);
+      buildingsVersion = -1;
       budget = 0;
       rate = 0;
       last = performance.now();
@@ -52,6 +55,7 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
     case 'rate':
       rate = m.rate;
       if (rate === 0) budget = 0;
+      sim?.setStride(m.stride);
       break;
     case 'watch':
       watch = m.id;
@@ -74,15 +78,28 @@ setInterval(() => {
   if (!sim) return;
   budget += dt * rate;
   let ticks = 0;
-  while (budget >= TICK_SECONDS && performance.now() - now < 14) {
+  const stepSeconds = TICK_SECONDS * sim.state.stride;
+  while (budget >= stepSeconds && performance.now() - now < 14) {
     sim.step();
-    budget -= TICK_SECONDS;
+    budget -= stepSeconds;
     ticks++;
   }
   // If the device cannot keep up with the requested speed, time simply flows slower.
-  const lagging = budget > TICK_SECONDS * 4;
+  const lagging = budget > stepSeconds * 4;
   if (lagging) budget = 0;
-  if (sim.rosterVersion !== rosterVersion) postRoster();
+  if (sim.rosterVersion !== rosterVersion && now - lastRoster > 400) {
+    lastRoster = now;
+    postRoster();
+  }
+  if (sim.buildingsVersion !== buildingsVersion && now - lastBuildings > 400) {
+    lastBuildings = now;
+    buildingsVersion = sim.buildingsVersion;
+    ctx.postMessage({ type: 'buildings', buildings: sim.state.buildings });
+  }
+  if (now - lastEconomy > 1000) {
+    lastEconomy = now;
+    ctx.postMessage({ type: 'economy', economy: sim.economy() });
+  }
   if (ticks > 0 || now - lastSnapshot > 500) {
     lastSnapshot = now;
     postSnapshot(lagging);

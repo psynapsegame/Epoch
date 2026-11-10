@@ -12,11 +12,16 @@ export enum Activity {
   Wandering = 6,
   Resting = 7,
   Playing = 8,
+  Working = 9,
+  Shopping = 10,
+  Building = 11,
+  Trading = 12,
 }
-export const ACTIVITY_COUNT = 9;
+export const ACTIVITY_COUNT = 13;
 
 export const ACTIVITY_LABELS: Record<number, string> = {
   0: 'Flâne', 1: 'Cueille et chasse', 2: 'Mange', 3: 'Boit', 4: 'Dort', 5: 'Discute', 6: 'Explore', 7: 'Se repose au foyer', 8: 'Joue',
+  9: 'Travaille', 10: 'S’approvisionne', 11: 'Bâtit', 12: 'En voyage de commerce',
 };
 
 /** Phases of an action. */
@@ -37,11 +42,33 @@ export const NEEDS = ['food', 'water', 'sleep', 'safety', 'shelter', 'social'] a
 export const NEED_LABELS = ['Nourriture', 'Eau', 'Sommeil', 'Sécurité', 'Logement', 'Liens sociaux'];
 export const enum N { Food, Water, Sleep, Safety, Shelter, Social }
 
-export const SKILLS = ['foraging', 'social', 'exploration'] as const;
-export const SKILL_LABELS = ['Cueillette et chasse', 'Éloquence', 'Exploration'];
+// ------------------------------------------------------------- economy
+export const RESOURCES = ['food', 'wood', 'stone', 'iron', 'coal', 'gold', 'tools', 'goods'] as const;
+export const RESOURCE_LABELS = ['Nourriture', 'Bois', 'Pierre', 'Fer', 'Charbon', 'Or', 'Outils', 'Objets artisanaux'];
+export const RESOURCE_UNITS = ['repas', 'stères', 'blocs', 'lingots', 'sacs', 'pépites', 'outils', 'pièces'];
+export const enum R { Food, Wood, Stone, Iron, Coal, Gold, Tools, Goods }
+export const RESOURCE_COUNT = 8;
+/** Reference prices in coins per unit. */
+export const BASE_PRICE = [1, 0.8, 1.2, 3, 2, 12, 8, 5];
+
+export const JOBS = ['gatherer', 'farmer', 'herder', 'fisher', 'woodcutter', 'miner', 'builder', 'smith', 'artisan', 'merchant'] as const;
+export const JOB_LABELS_M = ['Cueilleur', 'Agriculteur', 'Éleveur', 'Pêcheur', 'Bûcheron', 'Mineur', 'Bâtisseur', 'Forgeron', 'Artisan', 'Marchand'];
+export const JOB_LABELS_F = ['Cueilleuse', 'Agricultrice', 'Éleveuse', 'Pêcheuse', 'Bûcheronne', 'Mineuse', 'Bâtisseuse', 'Forgeronne', 'Artisane', 'Marchande'];
+export const enum J { Gatherer, Farmer, Herder, Fisher, Woodcutter, Miner, Builder, Smith, Artisan, Merchant }
+export const JOB_COUNT = 10;
+
+/** Skills: one per profession, then eloquence and exploration. */
+export const SKILL_SOCIAL = 10;
+export const SKILL_EXPLORE = 11;
+export const SKILL_COUNT = 12;
+export const SKILL_LABELS = [
+  'Cueillette et chasse', 'Agriculture', 'Élevage', 'Pêche', 'Bûcheronnage', 'Extraction', 'Construction', 'Forge', 'Artisanat', 'Négoce',
+  'Éloquence', 'Exploration',
+];
 
 export type MemoryType =
-  | 'born' | 'settled' | 'married' | 'child' | 'friend' | 'quarrel' | 'discovery' | 'hunger' | 'gift' | 'received' | 'mourning' | 'feast';
+  | 'born' | 'settled' | 'married' | 'child' | 'friend' | 'quarrel' | 'discovery' | 'hunger' | 'gift' | 'received' | 'mourning' | 'feast'
+  | 'job' | 'built' | 'journey' | 'home';
 
 export interface Memory {
   /** Simulated time of the event. */
@@ -51,6 +78,8 @@ export interface Memory {
   ref?: number;
   /** Place name, if any. */
   place?: string;
+  /** Extra code: profession index for 'job', building kind for 'built'. */
+  what?: string | number;
 }
 
 export interface Person {
@@ -68,11 +97,15 @@ export interface Person {
   traits: number[];
   /** Need satisfaction, 6 values in [0,1] (1 = fully satisfied; see NEEDS). */
   needs: number[];
-  /** Skill levels in [0,1] (see SKILLS). */
+  /** Skill levels in [0,1] (see SKILL_LABELS). */
   skills: number[];
   health: number;
-  /** Possessions (abstract value). The economy arrives in phase 3. */
-  wealth: number;
+  /** Profession (see JOBS) and the building where it is practised (0 = none). */
+  job: number;
+  workplace: number;
+  /** End of pregnancy (simulated time), 0 when not expecting. */
+  pregnantUntil: number;
+  lastBirth: number;
   household: number;
   settlement: number;
   spouse: number;
@@ -97,12 +130,32 @@ export interface Person {
   until: number;
   /** Partner of a social action. */
   partner: number;
-  /** Meals being carried home. */
+  /** Goods being carried: quantity and resource index. */
   carry: number;
+  carryRes: number;
+  /** Trade journey in progress (merchants). */
+  trip: Trip | null;
   /** True while inside a building (not drawn). */
   inside: boolean;
   /** Lifetime counters (observable behaviour, used by statistics and tests). */
-  counts: { meals: number; forages: number; chats: number; explorations: number; gifts: number };
+  counts: { meals: number; forages: number; chats: number; explorations: number; gifts: number; shifts: number };
+}
+
+export interface Trip {
+  /** Destination settlement. */
+  to: number;
+  /** 1 = outbound, 2 = returning. */
+  stage: 1 | 2;
+  depart: number;
+  arrive: number;
+  /** Local coordinates of both ends in the home settlement's frame. */
+  fromE: number; fromN: number; toE: number; toN: number;
+  res: number;
+  qty: number;
+  /** Coins owed to the home settlement for the outbound cargo taken on consignment. */
+  owed: number;
+  /** Coins earned so far on this journey. */
+  earned: number;
 }
 
 export interface DeadPerson {
@@ -113,7 +166,7 @@ export interface DeadPerson {
   birth: number;
   birthPlace: string;
   death: number;
-  cause: 'starvation' | 'thirst';
+  cause: 'starvation' | 'thirst' | 'age';
   settlement: number;
   spouse: number;
   parents: [number, number];
@@ -130,6 +183,62 @@ export interface Household {
   members: number[];
   /** Meals stored in the pantry. */
   food: number;
+  /** Purse of the household (may go slightly negative: debts to the community). */
+  coins: number;
+}
+
+/** A building of a settlement, from first stake to finished work. */
+export interface SimBuilding {
+  id: number;
+  kind: string;
+  settlement: number;
+  e: number;
+  n: number;
+  /** Unit vector the front door faces. */
+  fe: number;
+  fn: number;
+  radius: number;
+  /** 0..1 — 1 when complete. */
+  progress: number;
+  started: number;
+  completed: number;
+  /** Resource extracted (mines), -1 otherwise. */
+  res: number;
+  /** Lifetime output in units (production buildings). */
+  produced: number;
+}
+
+export interface SettlementState {
+  id: number;
+  /** Communal stock by resource index. */
+  stock: number[];
+  prices: number[];
+  treasury: number;
+  /** Wild food available around the settlement; regrows daily, shrinks when over-gathered. */
+  forage: number;
+  /** Yearly harvest factor (0.45 = disastrous year, 1.25 = bountiful). */
+  harvest: number;
+  /** Buildings under construction. */
+  projects: number[];
+  /** Consecutive days with an empty granary. */
+  hungryDays: number;
+}
+
+export type SimEventType = 'founded' | 'birth' | 'death' | 'marriage' | 'project' | 'built' | 'famine' | 'harvest' | 'trade' | 'shortage';
+
+/** A dated fact recorded by the simulation (seed of the future chronicles). */
+export interface SimEvent {
+  t: number;
+  type: SimEventType;
+  settlement: number;
+  /** Person involved. */
+  a?: number;
+  b?: number;
+  /** Building kind, resource index, cause... */
+  what?: string | number;
+  /** Names frozen at the time of the event, so the record survives the people. */
+  names?: string[];
+  value?: number;
 }
 
 export interface SimState {
@@ -142,26 +251,30 @@ export interface SimState {
   persons: Person[];
   households: Household[];
   dead: DeadPerson[];
+  buildings: SimBuilding[];
+  settlements: SettlementState[];
+  events: SimEvent[];
+  nextBuildingId: number;
+  /** Ticks merged per step: 1 = finest; raised at very high speeds (coarser, aggregated simulation). */
+  stride: number;
 }
 
-export const SIM_STATE_VERSION = 1;
+export const SIM_STATE_VERSION = 2;
 
 // ------------------------------------------------------------ static sites
 
-export interface SiteBuilding {
+/** A neighbouring settlement reachable over land. */
+export interface SiteNeighbor {
   id: number;
-  kind: string;
+  /** Position of its centre in this settlement's local frame (metres). */
   e: number;
   n: number;
-  radius: number;
-  /** Point just outside the front door. */
-  doorE: number;
-  doorN: number;
+  distance: number;
 }
 
 /**
- * Static description of a settlement for the simulation: a local walkability
- * and foraging map derived from the real terrain, plus its buildings.
+ * Static description of the land around a settlement, derived from the real
+ * terrain: where one can walk, what the land yields, where water is.
  * Rebuilt deterministically from the world, never saved.
  */
 export interface SimSite {
@@ -175,15 +288,32 @@ export interface SimSite {
   /** Grid of size×size cells of `cell` metres, centred on the settlement. */
   size: number;
   cell: number;
-  /** 1 = walkable. */
+  /** 1 = walkable terrain (buildings are rasterised on top by the simulation). */
   walk: Uint8Array;
-  /** Foraging richness 0..255. */
+  /** 0 land, 1 fresh water, 2 sea, 3 too steep. */
+  kind: Uint8Array;
+  /** Wild food richness 0..255. */
   forage: Uint8Array;
-  buildings: SiteBuilding[];
-  /** Places to drink (well, river bank, lake shore). */
+  /** Soil fertility 0..255. */
+  fertility: Uint8Array;
+  /** Tree cover 0..255. */
+  wood: Uint8Array;
+  /** Mineral: high nibble = resource kind (1 iron, 2 coal, 3 gold, 4 stone), low nibble = richness. */
+  mineral: Uint8Array;
+  /** Natural places to drink (river bank, lake shore). */
   water: { e: number; n: number }[];
-  /** Gathering place (market or well). */
-  plaza: { e: number; n: number };
+  radius: number;
+  neighbors: SiteNeighbor[];
+}
+
+/** A building as placed by the world's founders (phase 1 layout), in local coordinates. */
+export interface FoundingBuilding {
+  kind: string;
+  settlement: number;
+  e: number;
+  n: number;
+  fe: number;
+  fn: number;
   radius: number;
 }
 
@@ -209,6 +339,8 @@ export interface PopulationSummary {
   avgHealth: number;
   pantryMeals: number;
   inhabitedSettlements: number;
+  byJob: number[];
+  births: number;
 }
 
 /** Static identity of a person for lists and rendering. */
@@ -222,6 +354,32 @@ export interface RosterEntry {
   household: number;
   /** Building id of the home. */
   home: number;
+  job: number;
+  workplace: number;
+}
+
+/** Economic view of one settlement for the interface. */
+export interface SettlementView {
+  id: number;
+  population: number;
+  adults: number;
+  stock: number[];
+  prices: number[];
+  /** Stock level each resource is aimed at. */
+  targets: number[];
+  treasury: number;
+  forage: number;
+  harvest: number;
+  jobs: number[];
+  projects: { id: number; kind: string; progress: number; missing: number[] }[];
+  buildings: number;
+  housing: number;
+}
+
+export interface EconomyView {
+  settlements: SettlementView[];
+  /** Most recent events, newest last. */
+  events: SimEvent[];
 }
 
 /** Everything the interface needs to show one person's sheet (built in the simulation thread). */
@@ -230,7 +388,7 @@ export interface PersonView {
   person: Person | DeadPerson;
   age: number;
   settlementName: string;
-  household: { name: string; food: number; members: number[] } | null;
+  household: { name: string; food: number; coins: number; members: number[] } | null;
   /** Names of every person referenced (family, bonds, memories), living or dead. */
   names: Record<number, string>;
   /** Ids among `names` who have died. */

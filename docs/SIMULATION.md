@@ -101,10 +101,8 @@ pas. Pour 5 000–10 000 habitants, les phases suivantes ajouteront : mise à jo
 besoins, agrégation des habitants loin de la caméra aux vitesses élevées, instantanés limités au
 voisinage de la caméra.
 
-## Limites connues
+## Phase 3
 
-- Les habitants restent dans le périmètre de leur hameau (≈ 225 m) : les voyages entre hameaux
-  arrivent avec le commerce et l’exploration (phases 3–4).
-- Pas encore de naissances ni de vieillissement mortel : le cycle des générations est la phase 4.
-- Le don de vivres entre foyers voisins est instantané (pas de trajet dédié).
-- Métiers et richesse : tout adulte vit de cueillette ; l’économie est la phase 3.
+Métiers, ressources, prix, commerce, chantiers, unions, naissances et vieillesse sont décrits dans
+[ECONOMY.md](ECONOMY.md). Les règles collectives s’exécutent une fois par jour simulé
+(`economy.ts → dailyUpdate`), les individus continuent de décider par utilité.

@@ -12,11 +12,11 @@ import * as THREE from 'three';
 
 export type BuildingKind =
   | 'hut' | 'house' | 'longhouse' | 'farm' | 'barn' | 'market' | 'workshop'
-  | 'storehouse' | 'temple' | 'well' | 'windmill' | 'watchtower' | 'dock';
+  | 'storehouse' | 'temple' | 'well' | 'windmill' | 'watchtower' | 'dock' | 'mine';
 
 export const BUILDING_KINDS: BuildingKind[] = [
   'hut', 'house', 'longhouse', 'farm', 'barn', 'market', 'workshop',
-  'storehouse', 'temple', 'well', 'windmill', 'watchtower', 'dock',
+  'storehouse', 'temple', 'well', 'windmill', 'watchtower', 'dock', 'mine',
 ];
 
 export interface BuildingModel {
@@ -854,9 +854,41 @@ function dock(b: Builder): void {
   b.beam([-1.6, 1.0, 4.4], [-2.6, 0.38, 6.9], 0.04, 0.04, ROPE);
 }
 
+/** Mine: a timber-propped adit driven into a rocky mound, with spoil heap, ore cart and tool shed. */
+function mine(b: Builder): void {
+  // rocky mound (two stacked irregular masses)
+  b.cyl(0, -1.5, -1.6, 5.4, 4.2, 3.6, 9, b.jit(STONE_D, 0.1));
+  b.cyl(-0.4, 2.1, -1.9, 4.1, 2.2, 2.4, 8, b.jit(STONE, 0.1), { top: true });
+  b.cyl(1.6, 2.0, -0.6, 2.0, 1.0, 1.5, 6, b.jit(STONE_L, 0.1), { top: true });
+  // adit: dark mouth framed by props and a lintel
+  b.box(0, 0, 2.25, 2.0, 2.3, 0.5, [0.03, 0.03, 0.035]);
+  for (const s of [-1, 1]) b.box(s * 1.15, -0.2, 2.6, 0.34, 2.75, 0.34, TIMBER);
+  b.box(0, 2.45, 2.6, 3.0, 0.36, 0.4, TIMBER_D);
+  b.box(0, 2.8, 2.45, 2.6, 0.16, 0.9, PLANK);
+  lantern(b, 1.15, 1.9, 2.95, 0.26);
+  // rails and ore cart
+  for (const s of [-1, 1]) b.beam([s * 0.45, 0.06, 2.6], [s * 0.45, 0.06, 6.4], 0.08, 0.08, IRON);
+  for (let i = 0; i < 6; i++) b.box(0, 0.0, 3.0 + i * 0.62, 1.3, 0.07, 0.16, TIMBER_D);
+  b.box(0, 0.3, 5.0, 1.0, 0.62, 1.4, PLANK);
+  b.box(0, 0.92, 5.0, 0.84, 0.2, 1.2, STONE_D);
+  for (const s of [-1, 1]) for (const z of [4.55, 5.45]) b.cyl(s * 0.52, 0.02, z, 0.2, 0.2, 0.1, 6, IRON, { top: true });
+  // spoil heap and supplies
+  b.cyl(-3.3, -1.5, 3.6, 2.3, 0.5, 2.6, 7, b.jit(STONE_L, 0.12), { top: true });
+  b.cyl(3.0, -1.5, 4.2, 1.5, 0.4, 2.1, 6, b.jit(STONE, 0.12), { top: true });
+  crate(b, 2.4, 0, 2.6, 0.7);
+  barrel(b, 3.2, 0, 2.9);
+  // tool shed
+  b.place(-3.6, 0, 0.6, 0.35, () => {
+    b.box(0, -1.5, 0, 2.6, 1.6, 2.2, STONE);
+    b.box(0, 0.1, 0, 2.4, 1.9, 2.0, PLANK);
+    doorAt(b, 0, 0.1, 0.8, 1.6, 1.0, TIMBER_D);
+    b.gableRoof(0, 2.0, 0, 2.4, 2.0, 0.8, { col: SHINGLE_W, thick: 0.12, over: 0.25, overEnd: 0.2, alongX: true, courses: 3 });
+  });
+}
+
 // ---------------------------------------------------------------- public API
 const GENERATORS: Record<BuildingKind, (b: Builder) => void> = {
-  hut, house, longhouse, farm, barn, market, workshop, storehouse, temple, well, windmill, watchtower, dock,
+  hut, house, longhouse, farm, barn, market, workshop, storehouse, temple, well, windmill, watchtower, dock, mine,
 };
 
 /** Build every building model. Deterministic: same output on every call. */

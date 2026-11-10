@@ -7,8 +7,11 @@ import '@fontsource/inter/600.css';
 import './styles.css';
 import type { Game } from '../game';
 import { SEASONS, SECONDS_PER_YEAR, SPEEDS } from '../sim/clock';
-import { formatDate, memoryText } from '../sim/text';
-import { ACTIVITY_LABELS, NEED_LABELS, SKILL_LABELS, TRAIT_LABELS, type DeadPerson, type Person, type PersonView } from '../sim/types';
+import { BUILDING_NAMES, eventText, formatDate, memoryText } from '../sim/text';
+import {
+  ACTIVITY_LABELS, JOB_LABELS_F, JOB_LABELS_M, NEED_LABELS, RESOURCE_LABELS, SKILL_LABELS, TRAIT_LABELS,
+  type DeadPerson, type Person, type PersonView,
+} from '../sim/types';
 import type { Building } from '../sim/settlements';
 import type { BuildingKind } from '../render/models/buildings';
 import type { AtlasMode } from '../render/worldTextures';
@@ -22,7 +25,7 @@ type SectionId = 'world' | 'population' | 'civilizations' | 'economy' | 'politic
 const SECTIONS: { id: SectionId; label: string; phase: number }[] = [
   { id: 'world', label: 'Monde', phase: 1 },
   { id: 'population', label: 'Population', phase: 2 },
-  { id: 'civilizations', label: 'Civilisations', phase: 3 },
+  { id: 'civilizations', label: 'Civilisations', phase: 4 },
   { id: 'economy', label: 'Économie', phase: 3 },
   { id: 'politics', label: 'Politique', phase: 4 },
   { id: 'history', label: 'Histoire', phase: 4 },
@@ -30,7 +33,7 @@ const SECTIONS: { id: SectionId; label: string; phase: number }[] = [
   { id: 'chronicles', label: 'Chroniques', phase: 7 },
   { id: 'divinity', label: 'Divinité', phase: 6 },
 ];
-const CURRENT_PHASE = 2;
+const CURRENT_PHASE = 3;
 
 const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
   hut: ['Hutte', 'Abri rudimentaire pour une petite famille.'],
@@ -46,6 +49,7 @@ const BUILDING_INFO: Record<BuildingKind, [string, string]> = {
   windmill: ['Moulin', 'Mouture du grain en farine.'],
   watchtower: ['Tour de guet', 'Surveillance des alentours.'],
   dock: ['Ponton', 'Accès à la mer : pêche et, plus tard, navigation.'],
+  mine: ['Mine', 'Galerie étayée : extraction de la pierre et des minerais.'],
 };
 
 const QUOTE = ['Avant les royaumes,', ' avant les guerres,', ' avant les légendes,', ' il n’existait qu’un monde.'];
@@ -77,7 +81,10 @@ export class App {
   private camRef: { dir: THREE.Vector3; dist: number; heading: number } | null = null;
   private toastTimer = 0;
   private inspectorHeld = false;
+  private panelHeld = false;
   private lastPopulationUpdate = 0;
+  private econSite = 0;
+  private shownBuilding = 0;
   private touch: boolean;
 
   constructor(private game: Game) {
@@ -132,6 +139,13 @@ export class App {
       if (this.section === 'world') void this.renderWorldPanel();
     };
     game.engine.controls.onPan = () => { game.following = false; };
+    game.onBuildings = () => {
+      const b = game.buildings.find((x) => x.id === this.shownBuilding);
+      if (b && !this.inspectorHeld && !this.inspector.classList.contains('closed') && !game.selected) this.showBuilding(b);
+    };
+    this.panel.addEventListener('pointerdown', () => (this.panelHeld = true));
+    window.addEventListener('pointerup', () => (this.panelHeld = false));
+    window.addEventListener('pointercancel', () => (this.panelHeld = false));
     this.inspector.addEventListener('pointerdown', () => (this.inspectorHeld = true));
     window.addEventListener('pointerup', () => (this.inspectorHeld = false));
     window.addEventListener('pointercancel', () => (this.inspectorHeld = false));
@@ -238,6 +252,7 @@ export class App {
       this.perf.innerHTML = `<b>DIAGNOSTIC</b><br>FPS ${fmt(p.fps)} (cible ${g.pacedFps}) · image ${fmt(p.frameMs, 1)} ms<br>Qualité ${TIER_LABELS[g.tier]} · résolution ${fmt(g.governor.scale * 100)} %<br>Appels de dessin ${fmt(p.drawCalls)}<br>Triangles ${fmt(p.triangles)}<br>Parcelles de terrain ${p.chunks} / ${p.chunksTotal} (file ${p.queue})<br>Arbres affichés ${fmt(p.trees)}<br>Bâtiments ${fmt(p.buildings)}<br>Habitants affichés ${fmt(p.people)}${g.sim.lagging ? ' · simulation ralentie' : ''}<br>Géométries ${p.geometries} · textures ${p.textures}<br>Individus simulés ${fmt(sum.population)}`;
     }
     if (this.section === 'population' && now - this.lastPopulationUpdate > 900) this.updatePopulation();
+    if (this.section === 'economy' && now - this.lastPopulationUpdate > 900 && !this.panelHeld) this.renderEconomyPanel();
     this.trackTutorial();
   }
 
@@ -277,10 +292,16 @@ export class App {
     this.panel.classList.toggle('closed', id === null);
     if (id === 'world') void this.renderWorldPanel();
     if (id === 'population') this.renderPopulationPanel();
+    if (id === 'economy') this.renderEconomyPanel();
     if (id === 'atlas') {
       this.tutorialState.atlas = true;
       this.renderAtlasPanel();
     }
+  }
+
+  /** Name of a settlement's rank from its real population. */
+  private tier(pop: number): string {
+    return pop === 0 ? 'Site désert' : pop < 60 ? 'Hameau' : pop < 200 ? 'Village' : pop < 500 ? 'Bourg' : 'Ville';
   }
 
   private async renderWorldPanel(): Promise<void> {
@@ -316,7 +337,7 @@ export class App {
       <h3>Continents (${continents.length}) et îles (${islands.length})</h3>
       <div class="list">${w.data.landmasses.slice(0, 8).map((l) => `<button class="row" data-land="${l.id}"><span class="name">${esc(l.name)}</span><small>${l.kind === 'continent' ? 'Continent' : 'Île'} · ${fmt(l.area, 2)} km²</small></button>`).join('')}</div>
       <h3>Hameaux fondateurs</h3>
-      <div class="list">${g.settlements.map((s) => `<button class="row" data-settle="${s.id}"><span class="name">${esc(s.name)}</span><small>${s.buildings.length} bâtiments · ${g.sim.roster.filter((r) => r.settlement === s.id).length} habitants</small></button>`).join('')}</div>
+      <div class="list">${g.settlements.map((s) => `<button class="row" data-settle="${s.id}"><span class="name">${esc(s.name)}</span><small>${this.tier(g.sim.roster.filter((r) => r.settlement === s.id).length)} · ${g.buildings.filter((b) => b.settlement === s.id && (b.progress ?? 1) >= 1).length} bâtiments · ${g.sim.roster.filter((r) => r.settlement === s.id).length} habitants</small></button>`).join('')}</div>
       <p class="note">Bâtis sur les terres les plus propices du monde (fertilité, eau douce, relief). Les familles fondatrices s’y sont installées à l’aube de l’an 1.</p>
       <h3>Terres propices encore vierges</h3>
       <div class="list">${w.data.sites.slice(g.settlements.length, g.settlements.length + 6).map((s, i) => `<button class="row" data-site="${i + g.settlements.length}"><span class="name">Site ${i + 1 + g.settlements.length}</span><small>${[s.riverside ? 'eau douce' : '', s.coastal ? 'côtier' : ''].filter(Boolean).join(' · ') || 'intérieur'} · indice ${fmt(s.score * 100)}</small></button>`).join('')}</div>
@@ -398,6 +419,7 @@ export class App {
   // ------------------------------------------------------------ inspector
   private closeInspector(): void {
     this.inspector.classList.add('closed');
+    this.shownBuilding = 0;
     this.game.select(0);
   }
 
@@ -459,24 +481,26 @@ export class App {
     if (v.alive) {
       const a = p as Person;
       const walking = a.phase !== 1;
+      const wb = g.buildings.find((x) => x.id === a.workplace);
+      const workplace = wb ? BUILDING_NAMES[wb.kind].toLowerCase() : '';
       const what = walking && a.activity !== 0 ? `En chemin · ${ACTIVITY_LABELS[a.activity].toLowerCase()}` : ACTIVITY_LABELS[a.activity];
       const bonds = Object.entries(a.bonds).map(([id, val]) => [Number(id), val] as [number, number])
         .filter(([id]) => !v.household?.members.includes(id)).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1])).slice(0, 4);
       const bondLabel = (x: number) => (x >= 0.5 ? (female ? 'Amie' : 'Ami') : x >= 0.15 ? 'Bonne entente' : x <= -0.3 ? 'Brouille' : x < 0 ? 'Froideur' : 'Connaissance');
       body = `
-        <div class="status"><b>${what}</b><small>${years < 12 ? 'Enfant' : 'Vit de cueillette et de chasse'} · ${a.inside ? 'au foyer' : 'dehors'}${a.carry >= 0.5 ? ` · porte ${fmt(a.carry, 1)} repas` : ''}</small></div>
+        <div class="status"><b>${what}</b><small>${years < 14 ? 'Enfant' : years >= 68 ? `${female ? 'Ancienne' : 'Ancien'}` : (female ? JOB_LABELS_F : JOB_LABELS_M)[a.job]}${workplace ? ` · ${workplace}` : ''}${a.carry >= 0.5 ? ` · porte ${fmt(a.carry, 1)} × ${RESOURCE_LABELS[a.carryRes].toLowerCase()}` : ''}${a.pregnantUntil ? ' · attend un enfant' : ''}</small></div>
         <div class="btns"><button class="btn ${g.following ? 'primary' : ''}" data-a="follow">Suivre</button></div>
         <h3>Besoins</h3>${NEED_LABELS.map((l, i) => this.meter(l, a.needs[i])).join('')}${this.meter('Santé', a.health)}
         <h3>Ce qui l’attire maintenant</h3>${v.utilities.slice(0, 3).map((u) => this.meter(ACTIVITY_LABELS[u.activity], Math.min(1, u.score), 'calm')).join('')}
         <h3>Personnalité</h3>${TRAIT_LABELS.map((l, i) => this.meter(l, a.traits[i], 'calm')).join('')}
-        <h3>Savoir-faire</h3>${SKILL_LABELS.map((l, i) => this.meter(l, a.skills[i], 'calm')).join('')}
+        <h3>Savoir-faire</h3>${a.skills.map((v, i) => [i, v] as [number, number]).sort((x, y) => y[1] - x[1]).slice(0, 4).filter((x) => x[1] > 0.005).map(([i, v]) => this.meter(SKILL_LABELS[i], v, 'calm')).join('') || '<p class="note">Encore rien appris.</p>'}
         <h3>Foyer ${v.household ? esc(v.household.name) : ''}</h3>
-        <div class="kv"><span>Réserves</span><b>${v.household ? fmt(v.household.food, 1) : '0'} repas</b></div>
+        <div class="kv"><span>Réserves</span><b>${v.household ? fmt(v.household.food, 1) : '0'} repas</b><span>Bourse</span><b>${v.household ? fmt(v.household.coins, 1) : '0'} pièces</b></div>
         ${(v.household?.members ?? []).filter((id) => id !== a.id).map((id) => link(id, id === a.spouse ? (female ? 'Époux' : 'Épouse') : a.children.includes(id) ? 'Enfant' : a.parents.includes(id) ? 'Parent' : 'Foyer')).join('')}
         ${bonds.length ? `<h3>Liens</h3>${bonds.map(([id, val]) => link(id, bondLabel(val))).join('')}` : ''}`;
     } else {
       const d = p as DeadPerson;
-      body = `<div class="status"><b>${female ? 'Morte' : 'Mort'} ${d.cause === 'thirst' ? 'de soif' : 'de faim'}</b><small>${formatDate(d.death)}, à ${years} ans</small></div>
+      body = `<div class="status"><b>${female ? 'Morte' : 'Mort'} ${d.cause === 'thirst' ? 'de soif' : d.cause === 'age' ? 'de vieillesse' : 'de faim'}</b><small>${formatDate(d.death)}, à ${years} ans</small></div>
         <h3>Famille</h3>${[d.spouse, ...d.parents, ...d.children].filter(Boolean).map((id) => link(id, id === d.spouse ? 'Conjoint' : d.children.includes(id) ? 'Enfant' : 'Parent')).join('')}`;
     }
     const absent = v.alive ? [p.spouse, ...p.parents].filter((id) => id && !v.household?.members.includes(id)) : [];
@@ -529,7 +553,8 @@ export class App {
     const acts = s.byActivity.map((n, i) => [i, n] as [number, number]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]);
     stats.innerHTML = `<h3>Société</h3>
       <div class="kv"><span>Habitants</span><b>${fmt(s.alive)}</b><span>Foyers</span><b>${fmt(s.households)}</b>
-      <span>Réserves des foyers</span><b>${fmt(s.pantryMeals)} repas</b><span>Décès depuis l’an 1</span><b>${fmt(s.deaths)}</b></div>
+      <span>Réserves des foyers</span><b>${fmt(s.pantryMeals)} repas</b><span>Naissances depuis l’an 1</span><b>${fmt(s.births)}</b><span>Décès depuis l’an 1</span><b>${fmt(s.deaths)}</b></div>
+      <h3>Métiers</h3>${s.byJob.map((n, i) => [i, n] as [number, number]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]).map(([i, n]) => `<div class="meter"><span>${JOB_LABELS_M[i]}s</span><div class="bar"><i class="calm" style="width:${(n / Math.max(1, s.alive)) * 100}%"></i></div><b>${n}</b></div>`).join('')}
       <h3>Besoins moyens</h3>${NEED_LABELS.map((l, i) => this.meter(l, s.avgNeeds[i])).join('')}${this.meter('Santé', s.avgHealth)}
       <h3>En ce moment</h3>${acts.map(([i, n]) => `<div class="meter"><span>${ACTIVITY_LABELS[i]}</span><div class="bar"><i class="calm" style="width:${(n / Math.max(1, s.alive)) * 100}%"></i></div><b>${n}</b></div>`).join('')}`;
     const flags = new Map<number, number>();
@@ -572,19 +597,79 @@ export class App {
 
   private showBuilding(b: Building): void {
     const g = this.game;
+    this.shownBuilding = b.id;
     const s = g.settlements.find((x) => x.id === b.settlement);
-    const [name, desc] = BUILDING_INFO[b.kind];
+    const [name, desc] = BUILDING_INFO[b.kind] ?? ['Bâtiment', ''];
+    const sb = g.sim.buildings.find((x) => x.id === b.id);
+    const progress = b.progress ?? 1;
     const occupants = g.sim.roster.filter((r) => r.home === b.id);
-    const cell = g.world!.cellAt(b.dir.x, b.dir.y, b.dir.z);
-    const c = g.world!.describe(cell);
+    const workers = g.sim.roster.filter((r) => r.workplace === b.id);
+    const person = (r: { id: number; name: string; sex: 0 | 1; job: number }, withJob: boolean) =>
+      `<button class="row" data-person="${r.id}"><span class="name">${esc(r.name)}</span>${withJob ? `<small>${(r.sex === 0 ? JOB_LABELS_F : JOB_LABELS_M)[r.job]}</small>` : ''}</button>`;
+    const project = g.sim.economy?.settlements.find((x) => x.id === b.settlement)?.projects.find((p) => p.id === b.id);
+    const top = this.inspector.scrollTop;
     this.inspector.innerHTML = `<button class="close" data-a="close">×</button>
-      <div class="kicker">Bâtiment · n° ${b.id}</div><h2>${name}</h2>
-      <div class="sub">${s ? `Hameau de ${esc(s.name)}` : ''}</div>
+      <div class="kicker">${progress < 1 ? 'Chantier' : 'Bâtiment'} · n° ${b.id}</div><h2>${name}</h2>
+      <div class="sub">${s ? esc(s.name) : ''}</div>
       <p class="note" style="margin:0 0 12px">${desc}</p>
-      <div class="kv"><span>Occupants</span><b>${occupants.length || 'Aucun'}</b><span>Production</span><b>${occupants.length ? 'Foyer familial' : '—'}</b>
-      <span>Terrain</span><b>${esc(c.biomeName)}</b><span>Altitude</span><b>${fmt(c.elevation)} m</b><span>Fertilité alentour</span><b>${fmt(c.fertility * 100)} %</b></div>
-      ${occupants.length ? `<h3>Habitants</h3>${occupants.map((r) => `<button class="row" data-person="${r.id}"><span class="name">${esc(r.name)}</span></button>`).join('')}` : `<p class="note">${['house', 'hut', 'longhouse', 'farm'].includes(b.kind) ? 'Ce logis est encore vide.' : 'Les métiers et la production de ce bâtiment arrivent avec l’économie (phase 3).'}</p>`}`;
+      ${progress < 1 ? `<div class="status"><b>En construction</b><small>${project?.missing.length ? `À l’arrêt : manque de ${project.missing.map((r) => RESOURCE_LABELS[r].toLowerCase()).join(', ')}` : 'Les bâtisseurs y travaillent'}</small></div>${this.meter('Avancement', progress)}` : ''}
+      <div class="kv">
+        ${sb && sb.completed && progress >= 1 ? `<span>Achevé</span><b>${formatDate(sb.completed)}</b>` : sb ? `<span>Chantier ouvert</span><b>${formatDate(sb.started)}</b>` : ''}
+        ${sb && sb.res >= 0 ? `<span>Extraction</span><b>${RESOURCE_LABELS[sb.res]}</b>` : ''}
+        ${sb && sb.produced > 0 ? `<span>Production cumulée</span><b>${fmt(sb.produced)} unités</b>` : ''}
+        ${occupants.length ? `<span>Habitants</span><b>${occupants.length}</b>` : ''}${workers.length ? `<span>Travailleurs</span><b>${workers.length}</b>` : ''}
+      </div>
+      ${workers.length ? `<h3>Y travaillent</h3>${workers.map((r) => person(r, true)).join('')}` : ''}
+      ${occupants.length ? `<h3>Y vivent</h3>${occupants.map((r) => person(r, false)).join('')}` : ''}
+      ${!workers.length && !occupants.length && progress >= 1 ? `<p class="note">${['house', 'hut', 'longhouse', 'farm'].includes(b.kind) ? 'Ce logis est vide pour l’instant.' : 'Personne n’y est affecté en ce moment.'}</p>` : ''}`;
+    this.inspector.scrollTop = top;
     this.inspector.classList.remove('closed');
+  }
+
+  // -------------------------------------------------------------- economy
+  /** Stocks, prices, trades, building sites and journal of one settlement — live simulation data. */
+  private renderEconomyPanel(): void {
+    this.lastPopulationUpdate = performance.now();
+    const g = this.game;
+    this.panel.querySelector('h2')!.textContent = 'Économie';
+    const body = this.panel.querySelector<HTMLElement>('.body')!;
+    const eco = g.sim.economy;
+    if (!eco) { body.innerHTML = '<p class="note">La simulation démarre…</p>'; return; }
+    const inhabited = eco.settlements.filter((x) => x.population > 0);
+    if (!inhabited.some((x) => x.id === this.econSite)) this.econSite = inhabited[0]?.id ?? 0;
+    const st = inhabited.find((x) => x.id === this.econSite);
+    if (!st) { body.innerHTML = '<p class="note">Aucun lieu habité.</p>'; return; }
+    const nameOf = (id: number) => g.settlements.find((x) => x.id === id)?.name ?? '?';
+    const units = ['repas', 'stères', 'blocs', 'lingots', 'sacs', 'pépites', 'outils', 'pièces'];
+    const rows = st.stock.map((v, r) => {
+      const t = st.targets[r];
+      if (v < 0.5 && t === 0) return '';
+      const level = t > 0 ? v / t : 2;
+      const state = t === 0 ? '' : level < 0.35 ? 'Pénurie' : level < 0.8 ? 'Bas' : level > 1.6 ? 'Abondant' : 'Suffisant';
+      return `<div class="meter"><span>${RESOURCE_LABELS[r]}<br><small style="color:var(--dim)">${fmt(st.prices[r], 2)} p. · ${state}</small></span><div class="bar"><i class="${level < 0.35 ? 'low' : ''}" style="width:${Math.min(100, level * 50)}%"></i></div><b>${fmt(v)}</b></div>`;
+    }).join('');
+    const events = eco.events.filter((e) => e.settlement === st.id).slice(-10).reverse();
+    const top = body.scrollTop;
+    body.innerHTML = `
+      <div class="btns">${inhabited.map((x) => `<button class="btn ${x.id === st.id ? 'primary' : ''}" data-site="${x.id}">${esc(nameOf(x.id))}</button>`).join('')}</div>
+      <h3>${this.tier(st.population)} de ${esc(nameOf(st.id))}</h3>
+      <div class="kv"><span>Habitants</span><b>${st.population} (${st.adults} actifs)</b><span>Logements</span><b>${st.housing} places</b>
+        <span>Bâtiments</span><b>${st.buildings}</b><span>Caisse commune</span><b>${fmt(st.treasury)} pièces</b>
+        <span>Gibier et cueillette</span><b>${fmt(Math.min(1, st.forage) * 100)} %</b><span>Récolte de l’année</span><b>${fmt(st.harvest * 100)} %</b></div>
+      <h3>Greniers et prix</h3>${rows}
+      <p class="note">Barre : stock par rapport au niveau visé (${units[0]}, ${units[1]}, ${units[2]}…). Un prix élevé signale un manque et attire les bras.</p>
+      <h3>Métiers</h3>${st.jobs.map((n, i) => [i, n] as [number, number]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]).map(([i, n]) => `<div class="meter"><span>${JOB_LABELS_M[i]}s</span><div class="bar"><i class="calm" style="width:${(n / Math.max(1, st.adults)) * 100}%"></i></div><b>${n}</b></div>`).join('')}
+      <h3>Chantiers</h3>${st.projects.length ? st.projects.map((p) => `<button class="row" data-building="${p.id}"><span class="name">${BUILDING_NAMES[p.kind] ?? p.kind}</span><small>${fmt(p.progress * 100)} %${p.missing.length ? ` · manque : ${p.missing.map((r) => RESOURCE_LABELS[r].toLowerCase()).join(', ')}` : ''}</small></button>`).join('') : '<p class="note">Aucun chantier en cours.</p>'}
+      <h3>Journal</h3><ul class="timeline">${events.map((e) => `<li><small>${formatDate(e.t)}</small>${esc(eventText(e, nameOf))}</li>`).join('') || '<li>Rien à signaler.</li>'}</ul>`;
+    body.scrollTop = top;
+    body.querySelectorAll<HTMLElement>('[data-site]').forEach((b) => b.addEventListener('click', () => { this.econSite = Number(b.dataset.site); this.renderEconomyPanel(); }));
+    body.querySelectorAll<HTMLElement>('[data-building]').forEach((b) => b.addEventListener('click', () => {
+      const bd = g.buildings.find((x) => x.id === Number(b.dataset.building));
+      if (!bd) return;
+      g.select(0);
+      this.showBuilding(bd);
+      g.engine.controls.flyTo(new THREE.Vector3(bd.dir.x, bd.dir.y, bd.dir.z), 90, 1.05);
+    }));
   }
 
   // ---------------------------------------------------------------- intro
@@ -679,7 +764,7 @@ export class App {
     try {
       const { checksumOk } = await g.load(save, (s, i, p) => this.progress(s, i, p));
       this.enterWorld(false);
-      this.toast(checksumOk ? `Partie restaurée — an ${g.date.year}` : 'Partie restaurée (monde régénéré par une version différente du générateur)');
+      this.toast(g.refounded ? 'Sauvegarde d’une phase antérieure : le monde et la date sont conservés, la société est refondée' : checksumOk ? `Partie restaurée — an ${g.date.year}` : 'Partie restaurée (monde régénéré par une version différente du générateur)');
     } catch (e) {
       this.showTitle();
       this.intro.querySelector('.err')!.textContent = (e as Error).message;

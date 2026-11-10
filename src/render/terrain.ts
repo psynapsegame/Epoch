@@ -101,7 +101,7 @@ export class PlanetTerrain {
   private sphere = new THREE.Sphere();
   private seed: number;
   /** Circles (unit direction + radius in metres) kept free of trees, e.g. settlements. */
-  private clearings: { dir: THREE.Vector3; radius: number }[] = [];
+  private clearings: { dir: THREE.Vector3; radius: number; cos: number }[] = [];
 
   constructor(private world: World, private material: THREE.Material, private treeAssets: TreeAssets, private opts: TerrainOptions) {
     this.seed = hashString(world.data.seed);
@@ -113,7 +113,7 @@ export class PlanetTerrain {
   }
 
   setClearings(list: { dir: THREE.Vector3; radius: number }[]): void {
-    this.clearings = list;
+    this.clearings = list.map((c) => ({ ...c, cos: Math.cos(c.radius / this.world.R) }));
   }
 
   /** Per-frame LOD selection. `budgetMs` bounds chunk construction time. */
@@ -297,6 +297,8 @@ export class PlanetTerrain {
     for (let k = 0; k < TREE_KIND_COUNT; k++) lists.push([]);
     const dir = new THREE.Vector3();
     const seed = this.seed + node.face * 7919;
+    const reach = (node.boundRadius + 30) / world.R;
+    const nearClearings = this.clearings.filter((cl) => cl.dir.angleTo(node.centerDir) < reach + cl.radius / world.R);
     for (let j = 0; j < TREE_GRID; j++) {
       for (let i = 0; i < TREE_GRID; i++) {
         const gx = gx0 + i, gy = gy0 + j;
@@ -308,8 +310,8 @@ export class PlanetTerrain {
         const h = world.elevationAt(dir.x, dir.y, dir.z);
         if (h < 1.3) continue;
         let cleared = false;
-        for (const cl of this.clearings) {
-          if (cl.dir.angleTo(dir) * world.R < cl.radius) { cleared = true; break; }
+        for (const cl of nearClearings) {
+          if (cl.dir.dot(dir) > cl.cos) { cleared = true; break; }
         }
         if (cleared) continue;
         const t = d.temperature[c], b = d.biome[c];

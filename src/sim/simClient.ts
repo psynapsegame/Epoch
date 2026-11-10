@@ -1,5 +1,5 @@
 import type { ToWorker } from './sim.worker';
-import type { PersonView, RosterEntry, SimSite, SimState, Snapshot } from './types';
+import type { EconomyView, FoundingBuilding, PersonView, RosterEntry, SimBuilding, SimSite, SimState, Snapshot } from './types';
 
 /** Main-thread handle on the simulation worker. */
 export class SimClient {
@@ -14,7 +14,10 @@ export class SimClient {
   rosterById = new Map<number, RosterEntry>();
   /** Most recent full state published by the worker (at most ~10 s old): used by autosave. */
   lastState: SimState | null = null;
+  buildings: SimBuilding[] = [];
+  economy: EconomyView | null = null;
   onRoster: (() => void) | null = null;
+  onBuildings: (() => void) | null = null;
   onDetail: ((id: number, view: PersonView | null) => void) | null = null;
 
   constructor() {
@@ -31,6 +34,13 @@ export class SimClient {
           this.roster = m.roster as RosterEntry[];
           this.rosterById = new Map(this.roster.map((r) => [r.id, r]));
           this.onRoster?.();
+          break;
+        case 'buildings':
+          this.buildings = m.buildings as SimBuilding[];
+          this.onBuildings?.();
+          break;
+        case 'economy':
+          this.economy = m.economy as EconomyView;
           break;
         case 'detail':
           this.onDetail?.(m.id, m.view);
@@ -50,16 +60,23 @@ export class SimClient {
     this.worker.postMessage(m);
   }
 
-  init(seed: string, sites: SimSite[], population: number, time: number, state?: SimState): void {
+  init(seed: string, sites: SimSite[], founding: FoundingBuilding[], population: number, time: number, state?: SimState): void {
+    this.buildings = [];
+    this.economy = null;
     this.snapshot = null;
     this.lastState = null;
     this.roster = [];
     this.rosterById.clear();
-    this.send({ type: 'init', seed, sites, population, time, state });
+    this.send({ type: 'init', seed, sites, founding, population, time, state });
   }
 
+  /**
+   * Sets the speed. At very high speeds ticks are merged (coarser, aggregated
+   * simulation) so thousands of inhabitants remain affordable on a phone.
+   */
   setRate(rate: number): void {
-    this.send({ type: 'rate', rate });
+    const stride = rate >= 400000 ? 20 : rate >= 40000 ? 6 : rate >= 4000 ? 2 : 1;
+    this.send({ type: 'rate', rate, stride });
   }
 
   /** Subscribes to live details of one person (0 = none). */

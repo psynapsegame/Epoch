@@ -1,7 +1,7 @@
 import { Rng } from '../core/rng';
 import { SECONDS_PER_YEAR } from './clock';
 import { dwellingCapacity } from './sites';
-import { Activity, Phase, SIM_STATE_VERSION, type Household, type Memory, type Person, type SimSite, type SimState } from './types';
+import { Activity, Phase, SKILL_COUNT, type Household, type Person, type SimBuilding, type SimSite } from './types';
 
 const FEMALE = ['Aëla', 'Brune', 'Cyanne', 'Dalia', 'Elwen', 'Fara', 'Gaïa', 'Hélia', 'Isaure', 'Jana', 'Kaëlle', 'Lyra', 'Maëve', 'Nérie', 'Oriane', 'Perle', 'Rhéa', 'Sélène', 'Talia', 'Una', 'Vesna', 'Ysolde', 'Zélie', 'Amara', 'Bérénice', 'Clio', 'Doria', 'Enora', 'Flore', 'Ilse', 'Liv', 'Mira', 'Nour', 'Ondine', 'Sibylle', 'Thaïs'];
 const MALE = ['Alaric', 'Bran', 'Cael', 'Doran', 'Edric', 'Faël', 'Gauvain', 'Hadrien', 'Ivar', 'Joris', 'Kael', 'Lothar', 'Maël', 'Nils', 'Oren', 'Perrin', 'Ronan', 'Soren', 'Tarek', 'Ulric', 'Vadim', 'Wulf', 'Yann', 'Zeno', 'Aubin', 'Brieuc', 'Corwin', 'Darius', 'Emrys', 'Galen', 'Idris', 'Léandre', 'Milo', 'Octave', 'Silas', 'Théo'];
@@ -14,6 +14,25 @@ export const TUNIC_TONES = 10;
 
 const trait = (rng: Rng) => (rng.next() + rng.next()) / 2;
 
+export const firstNameFor = (rng: Rng, sex: 0 | 1): string => rng.pick(sex === 0 ? FEMALE : MALE);
+
+/** A blank individual with a random temperament; callers fill in family, home and history. */
+export function blankPerson(rng: Rng, id: number, sex: 0 | 1, birth: number, lastName: string, place: string, settlement: number, household: number, time: number): Person {
+  return {
+    id, firstName: firstNameFor(rng, sex), lastName, sex, birth, birthPlace: place,
+    look: { skin: rng.int(0, SKIN_TONES - 1), hair: rng.int(0, HAIR_TONES - 1), tunic: rng.int(0, TUNIC_TONES - 1), height: 0.92 + rng.next() * 0.16 },
+    traits: Array.from({ length: 9 }, () => trait(rng)),
+    needs: [0.55 + rng.next() * 0.4, 0.55 + rng.next() * 0.4, 0.6 + rng.next() * 0.35, 0.9, 0.9, 0.5 + rng.next() * 0.4],
+    skills: new Array<number>(SKILL_COUNT).fill(0),
+    health: 1, job: 0, workplace: 0, pregnantUntil: 0, lastBirth: -1e12,
+    household, settlement, spouse: 0, parents: [0, 0], children: [], bonds: {},
+    memories: [{ t: birth, type: 'born', place }],
+    e: 0, n: 0, activity: Activity.Idle, phase: Phase.Do, te: 0, tn: 0, path: [], until: time, partner: 0,
+    carry: 0, carryRes: 0, trip: null, inside: false,
+    counts: { meals: 0, forages: 0, chats: 0, explorations: 0, gifts: 0, shifts: 0 },
+  };
+}
+
 function familyName(rng: Rng, used: Set<string>): string {
   for (;;) {
     const n = rng.pick(FAM_A) + rng.pick(FAM_B);
@@ -24,11 +43,17 @@ function familyName(rng: Rng, used: Set<string>): string {
   }
 }
 
+export interface Founders {
+  persons: Person[];
+  households: Household[];
+  nextId: number;
+}
+
 /**
  * Founds the first population: families housed in the dwellings of the
  * founding hamlets. Deterministic for a given seed, sites and start time.
  */
-export function createPopulation(seedRng: Rng, sites: SimSite[], count: number, time: number): SimState {
+export function createPopulation(seedRng: Rng, sites: SimSite[], buildings: SimBuilding[], count: number, time: number): Founders {
   const rng = seedRng.fork('population');
   const persons: Person[] = [];
   const households: Household[] = [];
@@ -36,25 +61,16 @@ export function createPopulation(seedRng: Rng, sites: SimSite[], count: number, 
   let nextId = 1;
 
   const makePerson = (site: SimSite, hh: Household, sex: 0 | 1, age: number, lastName: string, home: { e: number; n: number }, baseSkin: number): Person => {
-    const id = nextId++;
     const birth = time - (age + rng.next()) * SECONDS_PER_YEAR;
-    const memories: Memory[] = [{ t: birth, type: 'born', place: site.name }];
-    const p: Person = {
-      id, firstName: rng.pick(sex === 0 ? FEMALE : MALE), lastName, sex, birth, birthPlace: site.name,
-      look: {
-        skin: Math.max(0, Math.min(SKIN_TONES - 1, baseSkin + rng.int(-1, 1))),
-        hair: rng.int(0, HAIR_TONES - 1), tunic: rng.int(0, TUNIC_TONES - 1), height: 0.92 + rng.next() * 0.16,
-      },
-      traits: Array.from({ length: 9 }, () => trait(rng)),
-      needs: [0.55 + rng.next() * 0.4, 0.55 + rng.next() * 0.4, 0.6 + rng.next() * 0.35, 0.9, 0.9, 0.5 + rng.next() * 0.4],
-      skills: [age >= 12 ? 0.1 + rng.next() * 0.25 : 0, rng.next() * 0.2, rng.next() * 0.15],
-      health: 1, wealth: 0, household: hh.id, settlement: site.id, spouse: 0, parents: [0, 0], children: [], bonds: {}, memories,
-      e: home.e + rng.range(-1.5, 1.5), n: home.n + rng.range(-1.5, 1.5),
-      activity: Activity.Idle, phase: Phase.Do, te: 0, tn: 0, path: [], until: time, partner: 0, carry: 0, inside: false,
-      counts: { meals: 0, forages: 0, chats: 0, explorations: 0, gifts: 0 },
-    };
+    const p = blankPerson(rng, nextId++, sex, birth, lastName, site.name, site.id, hh.id, time);
+    p.look.skin = Math.max(0, Math.min(SKIN_TONES - 1, baseSkin + rng.int(-1, 1)));
+    if (age >= 12) p.skills[0] = 0.1 + rng.next() * 0.25;
+    p.skills[10] = rng.next() * 0.2;
+    p.skills[11] = rng.next() * 0.15;
+    p.e = home.e + rng.range(-1.5, 1.5);
+    p.n = home.n + rng.range(-1.5, 1.5);
     persons.push(p);
-    hh.members.push(id);
+    hh.members.push(p.id);
     return p;
   };
 
@@ -71,8 +87,8 @@ export function createPopulation(seedRng: Rng, sites: SimSite[], count: number, 
   outer: for (const site of sites) {
     const baseSkin = rng.int(1, SKIN_TONES - 2);
     const siteStart = persons.length;
-    const homes = site.buildings
-      .filter((b) => dwellingCapacity(b.kind) > 0)
+    const homes = buildings
+      .filter((b) => b.settlement === site.id && dwellingCapacity(b.kind) > 0)
       .sort((a, b) => Math.hypot(a.e, a.n) - Math.hypot(b.e, b.n) || a.id - b.id);
     for (const home of homes) {
       if (count - persons.length <= 0) break outer;
@@ -80,21 +96,22 @@ export function createPopulation(seedRng: Rng, sites: SimSite[], count: number, 
       if (remaining <= 0) break;
       const cap = Math.min(dwellingCapacity(home.kind), remaining);
       const lastName = familyName(rng, usedNames);
-      const hh: Household = { id: households.length + 1, name: lastName, settlement: site.id, building: home.id, members: [], food: 0 };
+      const hh: Household = { id: households.length + 1, name: lastName, settlement: site.id, building: home.id, members: [], food: 0, coins: 15 };
       households.push(hh);
-      const door = { e: home.doorE, n: home.doorN };
+      const reach = home.radius * 0.72 + 1.2;
+      const door = { e: home.e + home.fe * reach, n: home.n + home.fn * reach };
       const kind = rng.next();
       const members: Person[] = [];
       if (kind < 0.62 && cap >= 2) {
         // couple, usually with children
-        const ageF = 19 + rng.next() * 24, ageM = ageF + rng.range(-3, 7);
+        const ageF = 19 + rng.next() * 24, ageM = ageF + rng.range(-1, 7);
         const mother = makePerson(site, hh, 0, ageF, lastName, door, baseSkin);
         const father = makePerson(site, hh, 1, Math.max(18, ageM), lastName, door, baseSkin);
         marry(mother, father);
         members.push(mother, father);
         const kids = Math.min(cap - 2, kind < 0.12 ? 0 : rng.int(1, 3));
         for (let k = 0; k < kids; k++) {
-          const maxAge = Math.min(16, ageF - 17);
+          const maxAge = Math.min(16, ageF - 18.5);
           if (maxAge < 0.5) break;
           const child = makePerson(site, hh, rng.chance(0.5) ? 0 : 1, rng.next() * maxAge, lastName, door, baseSkin);
           child.parents = [mother.id, father.id];
@@ -106,6 +123,7 @@ export function createPopulation(seedRng: Rng, sites: SimSite[], count: number, 
             par.children.push(child.id);
             par.memories.push({ t: child.birth, type: 'child', ref: child.id });
           }
+          if (mother.lastBirth < child.birth) mother.lastBirth = child.birth;
           members.push(child);
         }
       } else if (kind < 0.76) {
@@ -140,7 +158,5 @@ export function createPopulation(seedRng: Rng, sites: SimSite[], count: number, 
       hh.food = members.length * (1.5 + rng.next());
     }
   }
-  const state: SimState = { version: SIM_STATE_VERSION, time, tick: 0, rng: 0, nextId, persons, households, dead: [] };
-  state.rng = rng.fork('simulation').state;
-  return state;
+  return { persons, households, nextId };
 }

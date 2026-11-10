@@ -6,7 +6,7 @@ joueur-divinité. Paysage, tactile, hors ligne.
 
 > « Avant les royaumes, avant les guerres, avant les légendes, il n’existait qu’un monde. »
 
-Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 2 — les premiers habitants.**
+Le projet est développé par phases (voir [docs/ROADMAP.md](docs/ROADMAP.md)). **État actuel : phase 3 — la civilisation.**
 
 ## Lancer
 
@@ -69,7 +69,20 @@ génération locale, sauvegardes locales). Guide complet : [docs/MOBILE.md](docs
 
 Détails : [docs/SIMULATION.md](docs/SIMULATION.md).
 
-Les sections Civilisations, Économie, Politique, Histoire, Chroniques et Divinité sont
+## Ce que contient la phase 3
+
+- **Dix métiers aux fonctions réelles** (agriculteur, éleveur, pêcheur, bûcheron, mineur, bâtisseur,
+  forgeron, artisan, marchand, cueilleur), attribués chaque jour selon les besoins et les aptitudes.
+- **Économie** : huit ressources, greniers, prix qui suivent la rareté, monnaie conservée, commerce
+  entre établissements par des marchands qui voyagent réellement.
+- **Construction par les habitants** : la communauté choisit ses chantiers, les bâtisseurs y consomment
+  les matériaux en stock, les bâtiments s’élèvent progressivement.
+- **Générations** : unions, naissances, hérédité, foyers qui se forment, mort de vieillesse.
+- **Conséquences** : mauvaises récoltes, famines, chantiers arrêtés faute de matériaux, pas d’outils sans fer.
+
+Détails : [docs/ECONOMY.md](docs/ECONOMY.md).
+
+Les sections Civilisations, Politique, Histoire, Chroniques et Divinité sont
 verrouillées dans l’interface tant que leurs systèmes n’existent pas : aucune donnée fictive n’est affichée.
 
 Architecture détaillée : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
