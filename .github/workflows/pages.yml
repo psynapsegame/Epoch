@@ -2,7 +2,8 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # the repository's default branch: the only one the github-pages environment lets deploy
+    branches: [claude/epoch-living-world-daivnl]
   workflow_dispatch:
 
 permissions:
